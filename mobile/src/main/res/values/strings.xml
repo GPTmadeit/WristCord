@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WristCord</string>
+    <string name="a11y_label">WristCord (Discord voice controls)</string>
+    <string name="a11y_summary">Lets your watch press Deafen and pick an audio output in Discord.</string>
+    <string name="a11y_description">WristCord clicks Discord\'s own in-call buttons on your behalf when your watch asks it to. It only reads Discord\'s screen, only while you are in a voice call, and never sends anything anywhere except to your paired watch.</string>
+</resources>

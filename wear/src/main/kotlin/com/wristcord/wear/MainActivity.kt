@@ -1,0 +1,46 @@
+package com.wristcord.wear
+
+import android.content.Intent
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import com.wristcord.wear.link.Commands
+import com.wristcord.wear.link.StateStore
+import com.wristcord.wear.ui.WearApp
+
+class MainActivity : ComponentActivity() {
+
+    private var openOutputs by mutableStateOf(false)
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        StateStore.load(this)
+        openOutputs = intent?.getBooleanExtra(EXTRA_OPEN_OUTPUTS, false) == true
+        setContent {
+            WearApp(
+                openOutputs = openOutputs,
+                onOutputsConsumed = { openOutputs = false },
+            )
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        openOutputs = intent.getBooleanExtra(EXTRA_OPEN_OUTPUTS, false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Ask the phone to republish - the watch may have been asleep through the last change.
+        Commands.refresh(this)
+    }
+
+    companion object {
+        /** Set by the Tile's Output button so tapping it lands straight on the device list. */
+        const val EXTRA_OPEN_OUTPUTS = "com.wristcord.OPEN_OUTPUTS"
+    }
+}

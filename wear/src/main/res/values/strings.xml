@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">WristCord</string>
+    <string name="tile_label">WristCord</string>
+    <string name="tile_description">Mute, deafen, switch output or leave the Discord voice call on your phone.</string>
+</resources>
