@@ -1,13 +1,16 @@
 package com.wristcord.mobile.link
 
 import android.content.Context
+import com.google.android.gms.wearable.Asset
 import com.google.android.gms.wearable.PutDataMapRequest
 import com.google.android.gms.wearable.Wearable
 import com.wristcord.mobile.audio.AudioOutputs
+import com.wristcord.mobile.discord.Artwork
 import com.wristcord.mobile.discord.Discord
 import com.wristcord.mobile.discord.DiscordAccessibilityService
 import com.wristcord.mobile.discord.DiscordNotificationListener
 import com.wristcord.mobile.discord.DiscordSelectors
+import com.wristcord.mobile.discord.VoiceNotification
 import com.wristcord.mobile.util.EventLog
 import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
@@ -54,13 +57,18 @@ class StatePublisher private constructor(private val app: Context) {
     }
 
     suspend fun publish(reason: String) = gate.withLock {
-        val next = compute()
+        val voice = DiscordNotificationListener.voiceNotification(app)
+        val artwork = Artwork.of(app, voice)
+        val next = compute(voice, artwork?.hash.orEmpty())
         val previous = _state.value
         _state.value = next
         if (previous.copy(updatedAt = 0) == next.copy(updatedAt = 0)) return@withLock
 
         val request = PutDataMapRequest.create(Wire.PATH_STATE).apply {
             dataMap.putAll(next.toDataMap())
+            // The bitmap rides along as an Asset rather than inside the DataMap: assets are
+            // transferred out of band and do not count against the ~100 KB item limit.
+            artwork?.let { dataMap.putAsset(Wire.KEY_ARTWORK, Asset.createFromBytes(it.bytes)) }
         }.asPutDataRequest().setUrgent()
 
         try {
@@ -71,7 +79,7 @@ class StatePublisher private constructor(private val app: Context) {
         }
     }
 
-    private fun compute(): VoiceState {
+    private fun compute(voice: VoiceNotification?, artworkHash: String): VoiceState {
         val blocker = when {
             !Discord.isInstalled(app) -> "Discord is not installed on the phone"
             !DiscordNotificationListener.isGranted(app) -> "Phone: notification access is off"
@@ -80,7 +88,6 @@ class StatePublisher private constructor(private val app: Context) {
             else -> ""
         }
 
-        val voice = DiscordNotificationListener.voiceNotification(app)
         val mutedNow = DiscordSelectors.pattern(app, DiscordSelectors.Slot.NOTIF_MUTED_NOW)
         val muteAny = DiscordSelectors.pattern(app, DiscordSelectors.Slot.NOTIF_MUTE)
         val deafenedNow = DiscordSelectors.pattern(app, DiscordSelectors.Slot.NOTIF_DEAFENED_NOW)
@@ -94,6 +101,7 @@ class StatePublisher private constructor(private val app: Context) {
             deafened = toggleFrom(voice?.hasAction(deafenedNow), voice?.hasAction(deafenAny)),
             outputs = AudioOutputs.list(app),
             blocker = blocker,
+            artworkHash = artworkHash,
             updatedAt = System.currentTimeMillis(),
         )
     }

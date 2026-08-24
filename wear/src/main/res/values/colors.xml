@@ -1,6 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="ic_launcher_background">#FFFFFF</color>
+    <!-- Discord blurple. The colour is the homage; the mark stays ours. -->
+    <color name="discord_blurple">#5865F2</color>
     <color name="google_blue">#4285F4</color>
     <color name="google_red">#EA4335</color>
     <color name="google_yellow">#FBBC04</color>

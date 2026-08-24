@@ -20,13 +20,18 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.Switch
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -41,7 +46,10 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -55,14 +63,18 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import androidx.compose.runtime.LaunchedEffect
+import com.wristcord.R
 import com.wristcord.mobile.diagnostics.Probe
 import com.wristcord.mobile.discord.Discord
 import com.wristcord.mobile.discord.DiscordAccessibilityService
 import com.wristcord.mobile.discord.DiscordNotificationListener
 import com.wristcord.mobile.discord.DiscordSelectors
+import com.wristcord.mobile.link.IconSync
 import com.wristcord.mobile.link.StatePublisher
+import com.wristcord.mobile.link.StatusService
 import com.wristcord.mobile.util.EventLog
 import com.wristcord.shared.Brand
+import com.wristcord.shared.IconVariant
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
 import com.wristcord.shared.Toggle
@@ -132,6 +144,8 @@ fun OnboardingScreen(updates: UpdateController) {
 
             PermissionsCard(grants)
             StatusCard(grants, state)
+            BackgroundCard()
+            AppearanceCard()
             UpdateCard(updates)
             DiagnosticsCard(onDump = { dump = it }, dump = dump)
             SelectorsCard()
@@ -406,6 +420,132 @@ private fun EventsCard(events: List<String>) {
                 }
             }
         }
+    }
+}
+
+/**
+ * Running in the background. Off by default - WristCord works without it, because the
+ * notification listener already keeps the process alive and Play services starts the message
+ * listener on demand. What this buys is a visible link status and some insurance against
+ * aggressive battery managers.
+ */
+@Composable
+private fun BackgroundCard() {
+    val ctx = LocalContext.current
+    var enabled by remember { mutableStateOf(StatusService.isEnabled(ctx)) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text("Status notification", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "Keeps WristCord running with a quiet notification showing the watch " +
+                            "link and the call, plus Mute and Leave in the shade.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+                Spacer(Modifier.width(12.dp))
+                Switch(
+                    checked = enabled,
+                    onCheckedChange = {
+                        enabled = it
+                        StatusService.setEnabled(ctx, it)
+                    },
+                )
+            }
+            Text(
+                "Optional. Everything works with this off.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+/**
+ * Icon picker. Chosen here for both devices - the watch is told over the Data Layer, because
+ * both APKs ship the same four aliases.
+ */
+@Composable
+private fun AppearanceCard() {
+    val ctx = LocalContext.current
+    var current by remember { mutableStateOf(IconVariant.current(ctx)) }
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text("App icon", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "Applies to the phone and the watch. The watch follows the next time it is in range.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                IconVariant.entries.forEach { variant ->
+                    IconChoice(
+                        variant = variant,
+                        selected = variant == current,
+                        onClick = {
+                            current = variant
+                            IconSync.choose(ctx, variant)
+                        },
+                    )
+                }
+            }
+            Text(
+                current.description,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun IconChoice(variant: IconVariant, selected: Boolean, onClick: () -> Unit) {
+    val preview = when (variant) {
+        IconVariant.HOMAGE -> R.drawable.ic_launcher_ring
+        IconVariant.PIXEL -> R.drawable.ic_launcher_ring_dark
+        IconVariant.BUBBLE -> R.drawable.ic_launcher_bubble
+        IconVariant.LINK -> R.drawable.ic_launcher_link
+    }
+    val ground = if (variant == IconVariant.PIXEL) Color.White else Color(Brand.BLURPLE)
+
+    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Box(
+            Modifier
+                .size(58.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(ground)
+                .border(
+                    width = if (selected) 3.dp else 1.dp,
+                    color = if (selected) {
+                        MaterialTheme.colorScheme.primary
+                    } else {
+                        MaterialTheme.colorScheme.outline
+                    },
+                    shape = RoundedCornerShape(16.dp),
+                )
+                .clickable(onClick = onClick),
+            contentAlignment = Alignment.Center,
+        ) {
+            Image(
+                painter = painterResource(preview),
+                contentDescription = variant.label,
+                contentScale = ContentScale.Fit,
+                modifier = Modifier.size(58.dp),
+            )
+        }
+        Text(
+            variant.label,
+            style = MaterialTheme.typography.labelSmall,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        )
     }
 }
 

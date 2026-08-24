@@ -1,5 +1,6 @@
 package com.wristcord.shared
 
+import androidx.compose.runtime.Immutable
 import com.google.android.gms.wearable.DataMap
 
 /**
@@ -28,6 +29,12 @@ object Wire {
     /** MessageClient reply carrying [ActionResult] for one command. Never silent. */
     const val PATH_RESULT = "/wristcord/result"
 
+    /** Phone -> watch: apply this launcher icon variant. Payload is the variant id, UTF-8. */
+    const val PATH_ICON = "/wristcord/icon"
+
+    /** DataMap key holding the server/channel artwork as a Wearable Asset. */
+    const val KEY_ARTWORK = "artwork"
+
     val ALL_ACTION_PATHS = listOf(PATH_MUTE, PATH_DEAFEN, PATH_DISCONNECT, PATH_OUTPUT, PATH_REFRESH)
 }
 
@@ -55,6 +62,7 @@ enum class Toggle {
 }
 
 /** One entry in the phone's audio output picker. */
+@Immutable
 data class OutputDevice(
     val id: Int,
     val type: Int,
@@ -77,7 +85,14 @@ data class OutputDevice(
     }
 }
 
-/** Everything the watch needs to render. Published by the phone on every observed change. */
+/**
+ * Everything the watch needs to render. Published by the phone on every observed change.
+ *
+ * [Immutable] is load-bearing, not decoration: this holds a List, which the Compose compiler
+ * would otherwise treat as possibly-mutable, and every state push from the phone would
+ * recompose the whole remote instead of the parts that changed.
+ */
+@Immutable
 data class VoiceState(
     val inCall: Boolean = false,
     val channel: String = "",
@@ -86,6 +101,12 @@ data class VoiceState(
     val outputs: List<OutputDevice> = emptyList(),
     /** Human-readable reason the phone cannot act right now, or "" when everything is wired up. */
     val blocker: String = "",
+    /**
+     * Fingerprint of the server/channel artwork currently attached to the data item. The bitmap
+     * itself travels as a Wearable Asset, which has to be resolved asynchronously - this lets
+     * the watch tell "same picture" from "new picture" without fetching it.
+     */
+    val artworkHash: String = "",
     val updatedAt: Long = 0L,
 ) {
     fun toDataMap(): DataMap = DataMap().apply {
@@ -95,6 +116,7 @@ data class VoiceState(
         putInt(K_DEAFENED, deafened.wire())
         putStringArray(K_OUTPUTS, outputs.map { it.encode() }.toTypedArray())
         putString(K_BLOCKER, blocker)
+        putString(K_ARTWORK_HASH, artworkHash)
         putLong(K_UPDATED_AT, updatedAt)
     }
 
@@ -105,6 +127,7 @@ data class VoiceState(
         private const val K_DEAFENED = "deafened"
         private const val K_OUTPUTS = "outputs"
         private const val K_BLOCKER = "blocker"
+        private const val K_ARTWORK_HASH = "artwork_hash"
         private const val K_UPDATED_AT = "updated_at"
 
         fun fromDataMap(map: DataMap): VoiceState = VoiceState(
@@ -114,12 +137,14 @@ data class VoiceState(
             deafened = Toggle.of(map.getInt(K_DEAFENED, -1)),
             outputs = (map.getStringArray(K_OUTPUTS) ?: emptyArray()).mapNotNull(OutputDevice::decode),
             blocker = map.getString(K_BLOCKER, ""),
+            artworkHash = map.getString(K_ARTWORK_HASH, ""),
             updatedAt = map.getLong(K_UPDATED_AT, 0L),
         )
     }
 }
 
 /** The phone's answer to one command. Sent for every command, success or failure. */
+@Immutable
 data class ActionResult(
     val path: String,
     val ok: Boolean,

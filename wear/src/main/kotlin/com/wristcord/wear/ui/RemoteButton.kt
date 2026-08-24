@@ -3,10 +3,12 @@ package com.wristcord.wear.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -30,6 +32,9 @@ import com.wristcord.shared.RemoteAction
  *
  * In ambient everything collapses to an outline on black - no fills, no colour - so the panel
  * draws almost nothing.
+ *
+ * [decorate] exists so the centre button can wrap its glyph in the one-handed-gesture
+ * indicator without this composable having to know that gestures exist.
  */
 @Composable
 fun RemoteButton(
@@ -40,9 +45,12 @@ fun RemoteButton(
     ambient: AmbientState,
     modifier: Modifier = Modifier,
     enabled: Boolean = true,
+    interactionSource: MutableInteractionSource? = null,
+    decorate: @Composable (@Composable () -> Unit) -> Unit = { it() },
     onClick: () -> Unit,
 ) {
     val iconSize = diameter * 0.42f
+    val source = interactionSource ?: remember { MutableInteractionSource() }
 
     val fill: Color
     val tint: Color
@@ -71,17 +79,24 @@ fun RemoteButton(
                 if (ring == Color.Transparent) Modifier
                 else Modifier.border(if (ambient.lowBit) 2.dp else 1.dp, ring, CircleShape)
             )
-            .clickable(enabled = enabled && !ambient.isAmbient, onClick = onClick)
+            .clickable(
+                enabled = enabled && !ambient.isAmbient,
+                interactionSource = source,
+                indication = null,
+                onClick = onClick,
+            )
             .semantics { contentDescription = action.label },
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painter = painterResource(action.icon(engaged)),
-            contentDescription = null,
-            tint = tint,
-            modifier = Modifier
-                .size(iconSize)
-                .alpha(if (busy) 0.45f else if (enabled) 1f else 0.35f),
-        )
+        decorate {
+            Icon(
+                painter = painterResource(action.icon(engaged)),
+                contentDescription = null,
+                tint = tint,
+                modifier = Modifier
+                    .size(iconSize)
+                    .alpha(if (busy) 0.45f else if (enabled) 1f else 0.35f),
+            )
+        }
     }
 }

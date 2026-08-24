@@ -3,4 +3,5 @@
     <string name="app_name">WristCord</string>
     <string name="tile_label">WristCord</string>
     <string name="tile_description">Mute, deafen, switch output or leave the Discord voice call on your phone.</string>
+    <string name="complication_label">WristCord mute state</string>
 </resources>

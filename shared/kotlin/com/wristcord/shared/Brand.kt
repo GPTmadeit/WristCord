@@ -8,6 +8,9 @@ package com.wristcord.shared
  * tile and in the phone's status card without anyone having to remember a legend.
  */
 object Brand {
+    /** Discord's own colour. Used for the icon ground - homage, not imitation. */
+    const val BLURPLE = 0xFF5865F2.toInt()
+
     const val BLUE = 0xFF4285F4.toInt()
     const val RED = 0xFFEA4335.toInt()
     const val YELLOW = 0xFFFBBC04.toInt()

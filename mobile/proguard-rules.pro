@@ -12,6 +12,12 @@
 -keep class com.wristcord.mobile.link.PhoneWearableListenerService { *; }
 -keep class com.wristcord.mobile.ui.MainActivity { *; }
 -keep class com.wristcord.shared.InstallResultReceiver { *; }
+-keep class com.wristcord.mobile.link.StatusService { *; }
+-keep class com.wristcord.mobile.link.StatusActionReceiver { *; }
+-keep class com.wristcord.mobile.link.BootReceiver { *; }
+
+# Launcher aliases have no class of their own, but the activity they target must survive.
+-keep class com.wristcord.mobile.ui.MainActivity { *; }
 
 # Wearable Data Layer reflects over listener services when Play services binds them.
 -keep class * extends com.google.android.gms.wearable.WearableListenerService { *; }

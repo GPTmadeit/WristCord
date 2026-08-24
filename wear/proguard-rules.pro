@@ -7,6 +7,11 @@
 -keep class com.wristcord.wear.tile.TileActionReceiver { *; }
 -keep class com.wristcord.wear.link.WearListenerService { *; }
 -keep class com.wristcord.shared.InstallResultReceiver { *; }
+-keep class com.wristcord.wear.link.OngoingService { *; }
+-keep class com.wristcord.wear.tile.WristCordComplicationService { *; }
+
+# Complication data sources are bound by the watch face across a binder.
+-keep class * extends androidx.wear.watchface.complications.datasource.ComplicationDataSourceService { *; }
 
 -keep class * extends com.google.android.gms.wearable.WearableListenerService { *; }
 

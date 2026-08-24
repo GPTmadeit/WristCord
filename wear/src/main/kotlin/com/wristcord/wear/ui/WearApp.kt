@@ -19,6 +19,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
@@ -40,7 +42,9 @@ import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
 import com.wristcord.shared.VoiceState
 import com.wristcord.shared.Wire
+import com.wristcord.wear.link.ArtworkStore
 import com.wristcord.wear.link.Commands
+import com.wristcord.wear.link.OngoingService
 import com.wristcord.wear.link.SlotConfig
 import com.wristcord.wear.link.StateStore
 
@@ -63,6 +67,8 @@ fun WearApp(
     val error by StateStore.error.collectAsState()
     val pending by StateStore.pending.collectAsState()
     val assignments by SlotConfig.assignments.collectAsState()
+    val artworkBitmap by ArtworkStore.bitmap.collectAsState()
+    val artwork: ImageBitmap? = remember(artworkBitmap) { artworkBitmap?.asImageBitmap() }
     val updateStatus by updates.status.collectAsState()
     val ambient = rememberAmbientState()
 
@@ -106,6 +112,7 @@ fun WearApp(
                     pending = pending,
                     assignments = assignments,
                     ambient = ambient,
+                    artwork = artwork,
                     updates = updates,
                     updateStatus = updateStatus,
                     onAction = onAction,
@@ -121,6 +128,7 @@ fun WearApp(
                         pending = pending,
                         assignments = assignments,
                         ambient = ambient,
+                        artwork = artwork,
                         updates = updates,
                         updateStatus = updateStatus,
                         onAction = onAction,
@@ -146,6 +154,7 @@ private fun Content(
     pending: String?,
     assignments: Map<Slot, RemoteAction>,
     ambient: AmbientState,
+    artwork: ImageBitmap?,
     updates: UpdateController,
     updateStatus: Updater.Status,
     onAction: (RemoteAction) -> Unit,
@@ -161,6 +170,7 @@ private fun Content(
             pending = pending,
             assignments = assignments,
             ambient = ambient,
+            artwork = artwork,
             onAction = onAction,
             onOpenSettings = { onPush(Screen.Settings) },
         )
@@ -178,6 +188,8 @@ private fun Content(
         is Screen.Settings -> SettingsScreen(
             assignments = assignments,
             updateSummary = updates.summary(updateStatus),
+            ongoingEnabled = OngoingService.isEnabled(ctx),
+            onToggleOngoing = { OngoingService.setEnabled(ctx, it) },
             onEditSlot = { onPush(Screen.SlotPicker(it)) },
             onReset = { SlotConfig.reset(ctx) },
             onOpenUpdates = {

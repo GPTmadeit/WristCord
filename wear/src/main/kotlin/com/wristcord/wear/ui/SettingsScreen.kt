@@ -17,6 +17,10 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -47,11 +51,14 @@ import com.wristcord.shared.Slot
 fun SettingsScreen(
     assignments: Map<Slot, RemoteAction>,
     updateSummary: String,
+    ongoingEnabled: Boolean,
+    onToggleOngoing: (Boolean) -> Unit,
     onEditSlot: (Slot) -> Unit,
     onReset: () -> Unit,
     onOpenUpdates: () -> Unit,
 ) {
     val scroll = rememberScrollState()
+    var ongoing by remember(ongoingEnabled) { mutableStateOf(ongoingEnabled) }
 
     ScreenScaffold(scrollState = scroll) { contentPadding ->
         Column(
@@ -98,6 +105,38 @@ fun SettingsScreen(
                 modifier = Modifier.fillMaxWidth(),
                 colors = ButtonDefaults.filledTonalButtonColors(),
                 label = { Text("Reset layout") },
+            )
+
+            ListHeader { Text("On the watch face") }
+
+            Button(
+                onClick = {
+                    ongoing = !ongoing
+                    onToggleOngoing(ongoing)
+                },
+                modifier = Modifier.fillMaxWidth(),
+                colors = if (ongoing) {
+                    ButtonDefaults.buttonColors()
+                } else {
+                    ButtonDefaults.filledTonalButtonColors()
+                },
+                icon = {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_tile),
+                        contentDescription = null,
+                        tint = if (ongoing) Color(Brand.INK) else Color(Brand.BLUE),
+                        modifier = Modifier.size(20.dp),
+                    )
+                },
+                secondaryLabel = { Text(if (ongoing) "Shown during calls" else "Off") },
+                label = { Text("Watch face chip") },
+            )
+
+            Text(
+                "A complication is available too - add it from your watch face's own editor.",
+                style = MaterialTheme.typography.labelSmall,
+                color = Color(Brand.ON_SURFACE_VARIANT),
+                textAlign = TextAlign.Center,
             )
 
             ListHeader { Text("App") }

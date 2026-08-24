@@ -11,8 +11,11 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import com.wristcord.BuildConfig
+import com.wristcord.mobile.link.IconSync
 import com.wristcord.mobile.link.StatePublisher
+import com.wristcord.mobile.link.StatusService
 import com.wristcord.shared.Brand
+import com.wristcord.shared.IconVariant
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
 
@@ -29,6 +32,8 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        IconVariant.ensureApplied(this)
+        StatusService.startIfEnabled(this)
         setContent {
             WristCordTheme {
                 OnboardingScreen(updates = updates)
@@ -41,6 +46,8 @@ class MainActivity : ComponentActivity() {
         // Coming back from the two settings screens is the most likely moment for the
         // permission picture - and therefore the watch's blocker text - to have changed.
         StatePublisher.get(this).refresh("phone app resumed")
+        // Repairs a watch that was out of range when the icon last changed.
+        IconSync.resend(this)
     }
 }
 

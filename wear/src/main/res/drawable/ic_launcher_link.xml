@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Watch app: a watch reaching out to a phone. Mirror of the phone build's link icon. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- watch, left: strap, body, crown -->
+    <path android:fillColor="#FFFFFF" android:pathData="M28,32h12v9h-12z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M28,67h12v9h-12z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M24,40m6,0h8a6,6 0 0 1 6,6v16a6,6 0 0 1 -6,6h-8a6,6 0 0 1 -6,-6v-16a6,6 0 0 1 6,-6z" />
+    <path android:fillColor="#34A853" android:pathData="M27,44h14v20h-14z" />
+    <path android:fillColor="#FBBC04" android:pathData="M21,50h3v8h-3z" />
+    <!-- phone, right -->
+    <path android:fillColor="#FFFFFF" android:pathData="M54,34m6,0h14a6,6 0 0 1 6,6v28a6,6 0 0 1 -6,6h-14a6,6 0 0 1 -6,-6v-28a6,6 0 0 1 6,-6z" />
+    <path android:fillColor="#4285F4" android:pathData="M58,40h18v24h-18z" />
+    <!-- the link: two arcs bridging the gap, pointing the other way -->
+    <path android:pathData="M53,48 a9,9 0 0 0 0,12" android:strokeColor="#EA4335" android:strokeWidth="3.2" android:strokeLineCap="round" />
+    <path android:pathData="M48,45 a14,14 0 0 0 0,18" android:strokeColor="#FBBC04" android:strokeWidth="3.2" android:strokeLineCap="round" />
+</vector>

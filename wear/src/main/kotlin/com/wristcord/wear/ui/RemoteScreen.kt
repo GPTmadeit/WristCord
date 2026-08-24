@@ -1,7 +1,9 @@
 package com.wristcord.wear.ui
 
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
@@ -9,14 +11,19 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -27,19 +34,28 @@ import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.Text
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureAction
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureClickIndicator
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGestureClickIndicatorState
+import androidx.wear.compose.material3.onehandedgesture.OneHandedGesturePriority
+import androidx.wear.compose.material3.onehandedgesture.oneHandedGesture
+import androidx.wear.compose.material3.onehandedgesture.rememberOneHandedGestureConfiguration
 import com.wristcord.R
 import com.wristcord.shared.Brand
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
 import com.wristcord.shared.VoiceState
+import kotlinx.coroutines.launch
 
 /**
  * The remote, laid out the way YouTube Music lays out its transport: one oversized control in
  * the middle with two satellites flanking it, a secondary control below, and the context you
- * need on one line rather than a list you have to read.
+ * need on one line rather than a list you have to read. The server artwork sits behind it all
+ * the way album art sits behind YTM's controls.
  *
  * Which action sits in which position comes from [assignments] (Settings), so the big centre
- * disc is whatever you most want to hit blind - mute by default.
+ * disc is whatever you most want to hit blind - mute by default. That same centre action is
+ * what the double-pinch gesture fires.
  */
 @Composable
 fun RemoteScreen(
@@ -48,6 +64,7 @@ fun RemoteScreen(
     pending: String?,
     assignments: Map<Slot, RemoteAction>,
     ambient: AmbientState,
+    artwork: ImageBitmap?,
     onAction: (RemoteAction) -> Unit,
     onOpenSettings: () -> Unit,
 ) {
@@ -55,6 +72,16 @@ fun RemoteScreen(
     val left = assignments[Slot.LEFT] ?: Slot.LEFT.default
     val right = assignments[Slot.RIGHT] ?: Slot.RIGHT.default
     val bottom = assignments[Slot.BOTTOM] ?: Slot.BOTTOM.default
+
+    // Double pinch on Pixel Watch 3 and later. The library no-ops on hardware without it, so
+    // this costs nothing on older watches.
+    val gestureConfiguration = rememberOneHandedGestureConfiguration(
+        action = OneHandedGestureAction.Primary,
+        priority = OneHandedGesturePriority.Clickable,
+    )
+    val indicatorState = remember { OneHandedGestureClickIndicatorState() }
+    val interactionSource = remember { MutableInteractionSource() }
+    val scope = rememberCoroutineScope()
 
     BoxWithConstraints(
         modifier = Modifier
@@ -69,7 +96,32 @@ fun RemoteScreen(
         val bottomDiameter = size * 0.20f
         val gearDiameter = size * 0.145f
 
-        // Header: channel, or why there is nothing to control.
+        // Artwork lifted from Discord's own call notification. Never in ambient - it is the
+        // most expensive thing on screen and ambient is meant to light almost no pixels.
+        if (artwork != null && !ambient.isAmbient) {
+            Image(
+                bitmap = artwork,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .alpha(0.34f),
+            )
+            // The source is only 160px, so blowing it up to fill the watch is already soft -
+            // no blur pass needed. This scrim is what keeps the glyphs legible on top.
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .background(
+                        Brush.radialGradient(
+                            0f to Color.Black.copy(alpha = 0.72f),
+                            0.75f to Color.Black.copy(alpha = 0.45f),
+                            1f to Color.Black.copy(alpha = 0.80f),
+                        )
+                    )
+            )
+        }
+
         Text(
             text = headline(state),
             style = MaterialTheme.typography.labelMedium,
@@ -103,9 +155,27 @@ fun RemoteScreen(
             busy = pending == centre.path,
             ambient = ambient,
             enabled = centre != RemoteAction.NONE,
+            interactionSource = interactionSource,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = nudge, y = size * -0.02f + nudge),
+                .offset(x = nudge, y = size * -0.02f + nudge)
+                .oneHandedGesture(
+                    gestureConfiguration = gestureConfiguration,
+                    onGestureLabel = centre.centreLabel(state),
+                    // A pinch is deliberate in a way a touch is not, so unlike tapping it
+                    // stays live in ambient - that is the point of a hands-free remote.
+                    enabledInAmbient = true,
+                    interactionSource = interactionSource,
+                    onGestureAvailable = { scope.launch { indicatorState.showIndicator() } },
+                    onGesture = { onAction(centre) },
+                ),
+            decorate = { content ->
+                OneHandedGestureClickIndicator(
+                    gestureConfiguration = gestureConfiguration,
+                    state = indicatorState,
+                    content = content,
+                )
+            },
             onClick = { onAction(centre) },
         )
 
@@ -122,8 +192,6 @@ fun RemoteScreen(
             onClick = { onAction(right) },
         )
 
-        // One line of truth under the centre button: the error if there is one, otherwise what
-        // the centre control currently reads as.
         Column(
             modifier = Modifier
                 .align(Alignment.Center)

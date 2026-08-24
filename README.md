@@ -6,7 +6,7 @@ your paired Android phone**. Two modules, two installable APKs, one per device.
 | Module    | minSdk | What it is                                                   |
 |-----------|--------|--------------------------------------------------------------|
 | `:mobile` | 31     | Phone app: onboarding, discovery probe, and the two strategies |
-| `:wear`   | 33     | Watch app + a configurable Tile                               |
+| `:wear`   | 33     | Watch app, Tile, complication, watch-face chip                 |
 
 Both are built with `compileSdk`/`targetSdk` 36, Kotlin + Compose, **the same `applicationId`
 (`com.wristcord`) and the same signing key** — Google Play services only routes Data Layer
@@ -210,6 +210,76 @@ if that is the one you reach for; leave a slot Empty if you would rather not ris
 **The tile follows the same assignments** - it gives the centre action a full-width primary
 button and puts the other three underneath, so both surfaces stay in agreement.
 
+## Running in the background
+
+Both halves work without anything permanently resident - the phone's notification listener
+already keeps its process alive and Play services starts the message listener on demand. What
+these add is visibility and a bit of insurance against aggressive battery managers. Both are
+optional and both are off-switchable.
+
+**Phone — status notification.** A quiet ongoing notification showing whether the watch is
+reachable, what channel you are in, and the mute state, with **Mute** and **Leave** as actions
+in the shade. Toggle it on the main screen; it survives a reboot. Runs as a
+`connectedDevice` foreground service.
+
+**Watch — watch-face chip.** While a call is running, WristCord publishes an
+[Ongoing Activity](https://developer.android.com/training/wearables/ongoing-activity), the same
+affordance a running workout or a playing track gets: a chip on the watch face, one tap back
+into the remote. It stops itself the moment the call ends. Settings → *Watch face chip*.
+
+**Watch — complication.** A data source publishing `SHORT_TEXT` (`MUTE` / `LIVE` / `DEAF`) and
+`MONOCHROMATIC_IMAGE`, tap to open the remote. Add it the normal way, from your watch face's own
+editor — it appears as *WristCord mute state*. It reads the same cached state the tile does, so
+it is right even in a cold process.
+
+## Gestures
+
+The centre button is wired to Wear OS's
+[one-handed gestures](https://developer.android.com/training/wearables/compose/one-handed-gestures)
+as the **primary action** — on Pixel Watch that is the **double-pinch**. Whatever you have
+assigned to the centre slot is what a pinch fires, so if you move Deafen to the centre, pinch
+deafens.
+
+Two details worth knowing:
+
+- It needs **Wear OS 7 (API 37) and a Pixel Watch 3 or later**. On anything older the library
+  no-ops and normal touch is unaffected — nothing to configure, nothing to break.
+- Pinch stays live **in ambient**, unlike tapping. A pinch is a deliberate gesture in a way a
+  screen touch is not, so it cannot be triggered by a sleeve — which makes it the one control
+  worth leaving armed while the screen is dimmed.
+
+The first time the gesture is available on a screen, the centre button shows the system's own
+hint animation.
+
+## Server artwork
+
+The phone lifts the large icon off Discord's own call notification, shrinks it to 160px and
+sends it to the watch as a Wearable `Asset`; the watch renders it behind the controls under a
+radial scrim, the way YouTube Music puts album art behind its transport. It is a picture Discord
+already published to the notification shade — nothing is fetched from Discord's servers.
+
+The 160px source is deliberately smaller than the screen: blowing it up to fill the watch gives
+the soft backdrop for free, with no blur pass to pay for. It is never drawn in ambient.
+
+## App icons
+
+Four sets, switched from the phone, applied to **both** devices — the watch is told over the
+Data Layer, since both APKs ship the same four `<activity-alias>` entries.
+
+| | Ground | Mark |
+|---|---|---|
+| **Homage** (default) | Discord blurple | four-colour ring + mic |
+| **Pixel** | white | four-colour ring + mic |
+| **Bubble** | Discord blurple | four-colour chat bubble with the mic cut out |
+| **Link** | Discord blurple | phone→watch on the phone, watch→phone on the watch |
+
+Android cannot change an app icon at runtime, so each look is an alias onto the same activity
+and exactly one is enabled at a time. The new alias is enabled *before* the old one is disabled,
+because a moment with none enabled is a moment some launchers drop the shortcut for good.
+
+On the blurple: the colour is the homage. The glyph stays ours — none of these trace Discord's
+actual mark, which is theirs and would imply an affiliation this project does not have.
+
 ## Updating
 
 Both apps check [this repo's releases](../../releases) and install their own APK.
@@ -225,6 +295,19 @@ compared against the certificate of the app doing the updating, and a mismatch a
 explanation. Android would reject a mismatched update anyway - doing the check ourselves means
 WristCord never stages an APK that did not come from the same key it was built with, and you
 get a sentence rather than an opaque system error.
+
+## Toolchain
+
+`compileSdk` is **37** and the build runs **AGP 9.1 / Gradle 9.3.1 / JDK 17**. That is not
+gratuitous: the one-handed gesture API lives in Wear Compose 1.7, which requires both. AGP 9
+carries Kotlin itself, so this project declares only the Android plugin and the Compose compiler
+plugin — there is no `org.jetbrains.kotlin.android` here.
+
+`targetSdk` stays at 36; compiling against a newer platform and opting into its runtime
+behaviour are separate decisions, and only the first is needed.
+
+If you clone this, `sdkmanager "platforms;android-37.0" "build-tools;37.0.0"` is the one thing
+you may need that a stock install does not have.
 
 ## Why the released APKs are release builds
 
@@ -267,6 +350,11 @@ Debug builds still work the same way if you want them:
       right mute state.
 - [ ] Move an action to a different position in Settings; the tile picks up the same change.
 - [ ] Settings → Updates finds this repo and reports the installed version.
+- [ ] Double-pinch fires whatever is in the centre slot, screen on and in ambient.
+- [ ] The status notification on the phone flips between *Watch connected* and
+      *Watch not reachable* when you walk away.
+- [ ] The watch-face chip appears when a call starts and goes when it ends.
+- [ ] Changing the icon on the phone changes it on the watch too.
 
 ## Layout
 
@@ -275,16 +363,16 @@ settings.gradle.kts        two modules; shared/ is a source dir, not a third mod
 gradle/libs.versions.toml  version catalog
 keystore/wristcord.jks     the shared debug signing key (checked in on purpose)
 shared/kotlin/             Wire.kt (paths, VoiceState, ActionResult), Brand.kt (palette,
-                           RemoteAction, Slot), Updater.kt + UpdateController.kt (self-update);
-                           compiled into both APKs
-mobile/  discord/          selectors, notification listener, both strategies, controller
+                           RemoteAction, Slot), IconVariant.kt, Updater.kt +
+                           UpdateController.kt (self-update); compiled into both APKs
+mobile/  discord/          selectors, notification listener, both strategies, artwork, controller
          audio/            AudioOutputs - the picker list
-         link/             StatePublisher + WearableListenerService
+         link/             StatePublisher, WearableListenerService, StatusService, IconSync
          diagnostics/      Probe - the Step 0 dumps
          ui/               onboarding, diagnostics, selector overrides
 wear/    ui/               radial remote, settings, output list, updates, theme, ambient
-         link/             PhoneLink, StateStore, SlotConfig, Commands, listener service
-         tile/             Material3TileService + tap plumbing
+         link/             PhoneLink, StateStore, SlotConfig, ArtworkStore, OngoingService
+         tile/             Material3TileService, complication data source, tap plumbing
 ```
 
 `shared/kotlin` is added to both modules' `main` source set via `sourceSets`, so the wire

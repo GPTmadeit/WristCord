@@ -9,6 +9,10 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
+    <!-- Ongoing Activity chip on the watch face while a call is up. -->
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
 
     <application
         android:allowBackup="false"
@@ -27,12 +31,70 @@
             android:exported="true"
             android:label="@string/app_name"
             android:launchMode="singleTask"
-            android:theme="@android:style/Theme.DeviceDefault">
+            android:theme="@android:style/Theme.DeviceDefault" />
+
+        <!--
+            Switchable launcher icons. Android cannot change an icon at runtime, so each look
+            is an activity-alias onto the same activity and exactly one is enabled at a time.
+            Both modules declare the same four names, which is what lets the phone set the
+            icon on both devices from one place.
+        -->
+        <activity-alias
+            android:name=".LauncherHomage"
+            android:targetActivity="com.wristcord.wear.MainActivity"
+            android:enabled="true"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_homage"
+            android:roundIcon="@mipmap/ic_launcher_homage"
+            android:label="@string/app_name">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherPixel"
+            android:targetActivity="com.wristcord.wear.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_pixel"
+            android:roundIcon="@mipmap/ic_launcher_pixel"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherBubble"
+            android:targetActivity="com.wristcord.wear.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_bubble"
+            android:roundIcon="@mipmap/ic_launcher_bubble"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
+        <activity-alias
+            android:name=".LauncherLink"
+            android:targetActivity="com.wristcord.wear.MainActivity"
+            android:enabled="false"
+            android:exported="true"
+            android:icon="@mipmap/ic_launcher_link"
+            android:roundIcon="@mipmap/ic_launcher_link"
+            android:label="@string/app_name">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
 
         <!-- LaunchAction fallback for tile taps on renderers without PendingIntent support. -->
         <activity
@@ -69,6 +131,31 @@
             <meta-data
                 android:name="androidx.wear.tiles.PREVIEW"
                 android:resource="@drawable/tile_preview" />
+        </service>
+
+        <!-- Watch-face chip while a call is running. Stops itself when the call ends. -->
+        <service
+            android:name="com.wristcord.wear.link.OngoingService"
+            android:exported="false"
+            android:foregroundServiceType="connectedDevice" />
+
+        <!-- Watch-face complication: mute state at a glance, one tap to open the remote. -->
+        <service
+            android:name="com.wristcord.wear.tile.WristCordComplicationService"
+            android:exported="true"
+            android:icon="@drawable/ic_tile"
+            android:label="@string/complication_label"
+            android:permission="com.google.android.wearable.permission.BIND_COMPLICATION_PROVIDER">
+            <intent-filter>
+                <action android:name="android.support.wearable.complications.ACTION_COMPLICATION_UPDATE_REQUEST" />
+            </intent-filter>
+            <meta-data
+                android:name="android.support.wearable.complications.SUPPORTED_TYPES"
+                android:value="SHORT_TEXT,MONOCHROMATIC_IMAGE" />
+            <!-- 0 = never poll; we push updates when the phone sends new state. -->
+            <meta-data
+                android:name="android.support.wearable.complications.UPDATE_PERIOD_SECONDS"
+                android:value="0" />
         </service>
 
         <service

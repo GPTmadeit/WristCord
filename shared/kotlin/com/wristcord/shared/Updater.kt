@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageInstaller
 import android.content.pm.PackageManager
 import android.util.Log
+import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
@@ -40,6 +41,7 @@ object Updater {
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 30_000
 
+    @Immutable
     data class Release(
         val tag: String,
         val title: String,
@@ -51,6 +53,7 @@ object Updater {
         val version: String get() = tag.removePrefix("v")
     }
 
+    @Immutable
     sealed interface Status {
         data object Idle : Status
         data object Checking : Status
