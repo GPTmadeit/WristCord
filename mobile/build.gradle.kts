@@ -15,8 +15,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkMobile.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0"
     }
 
     signingConfigs {
@@ -37,7 +37,15 @@ android {
         }
         getByName("release") {
             signingConfig = signingConfigs.getByName("shared")
-            isMinifyEnabled = false
+            // The debug build is noticeably janky on watch hardware: a debuggable app opts out
+            // of ART's full AOT/JIT optimisation and Compose keeps its tooling hooks live.
+            // Release strips both, and R8 tree-shakes Compose down to what is actually used.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -47,6 +55,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -63,6 +72,10 @@ android {
     packaging {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
+}
+
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose-stability.conf"))
 }
 
 dependencies {

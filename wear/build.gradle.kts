@@ -13,8 +13,12 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkWear.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 2
+        versionName = "1.1.0"
+
+        // No Wear OS watch is x86; shipping those slices only inflates the download the
+        // watch has to pull over Wi-Fi when it updates itself.
+        ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
     signingConfigs {
@@ -34,7 +38,15 @@ android {
         }
         getByName("release") {
             signingConfig = signingConfigs.getByName("shared")
-            isMinifyEnabled = false
+            // The debug build is noticeably janky on watch hardware: a debuggable app opts out
+            // of ART's full AOT/JIT optimisation and Compose keeps its tooling hooks live.
+            // Release strips both, and R8 tree-shakes Compose down to what is actually used.
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -44,6 +56,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 
     compileOptions {
@@ -62,6 +75,10 @@ android {
     }
 }
 
+composeCompiler {
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose-stability.conf"))
+}
+
 dependencies {
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
@@ -70,12 +87,12 @@ dependencies {
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.ui.graphics)
-    implementation(libs.compose.ui.tooling.preview)
-    debugImplementation(libs.compose.ui.tooling)
 
     implementation(libs.wear.compose.material3)
     implementation(libs.wear.compose.foundation)
-    implementation(libs.wear.tooling.preview)
+
+    // AmbientLifecycleObserver - always-on display support.
+    implementation(libs.wear)
 
     // Tile: Material3TileService lives in androidx.wear.tiles (1.6+), the layout
     // components it hands you live in protolayout-material3 (1.4+).

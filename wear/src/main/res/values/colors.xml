@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <color name="ic_launcher_background">#5865F2</color>
+    <color name="ic_launcher_background">#FFFFFF</color>
+    <color name="google_blue">#4285F4</color>
+    <color name="google_red">#EA4335</color>
+    <color name="google_yellow">#FBBC04</color>
+    <color name="google_green">#34A853</color>
+    <color name="google_grey_900">#202124</color>
 </resources>

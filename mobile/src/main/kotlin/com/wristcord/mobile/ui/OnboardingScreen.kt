@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.net.Uri
 import android.provider.Settings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.horizontalScroll
@@ -25,6 +26,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -42,6 +44,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -55,6 +62,9 @@ import com.wristcord.mobile.discord.DiscordNotificationListener
 import com.wristcord.mobile.discord.DiscordSelectors
 import com.wristcord.mobile.link.StatePublisher
 import com.wristcord.mobile.util.EventLog
+import com.wristcord.shared.Brand
+import com.wristcord.shared.UpdateController
+import com.wristcord.shared.Updater
 import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
 import kotlinx.coroutines.delay
@@ -96,7 +106,7 @@ private fun rememberGrants(): Grants {
 }
 
 @Composable
-fun OnboardingScreen() {
+fun OnboardingScreen(updates: UpdateController) {
     val ctx = LocalContext.current
     val grants = rememberGrants()
     val state by StatePublisher.get(ctx).state.collectAsState()
@@ -112,7 +122,7 @@ fun OnboardingScreen() {
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Text("WristCord", style = MaterialTheme.typography.headlineMedium)
+            BrandHeader()
             Text(
                 "Phone side. Controls Discord only through its own notification actions and its " +
                     "own on-screen buttons - no Discord API, no token, no third-party client.",
@@ -122,6 +132,7 @@ fun OnboardingScreen() {
 
             PermissionsCard(grants)
             StatusCard(grants, state)
+            UpdateCard(updates)
             DiagnosticsCard(onDump = { dump = it }, dump = dump)
             SelectorsCard()
             EventsCard(events.map { it.toString() })
@@ -395,6 +406,123 @@ private fun EventsCard(events: List<String>) {
                 }
             }
         }
+    }
+}
+
+/** The name in Google's four product colours - the same palette the watch uses. */
+@Composable
+private fun BrandHeader() {
+    Text(
+        text = buildAnnotatedString {
+            val palette = listOf(
+                Brand.BLUE, Brand.RED, Brand.YELLOW, Brand.GREEN,
+                Brand.BLUE, Brand.RED, Brand.YELLOW, Brand.GREEN, Brand.BLUE,
+            )
+            "WristCord".forEachIndexed { index, ch ->
+                withStyle(
+                    SpanStyle(
+                        color = Color(palette[index % palette.size]),
+                        fontWeight = FontWeight.Bold,
+                    )
+                ) { append(ch) }
+            }
+        },
+        style = MaterialTheme.typography.headlineMedium,
+    )
+}
+
+/**
+ * Updates pulled from the project's GitHub releases. This card only ever updates the phone -
+ * the watch has the same card in its own Settings, because neither device can install for the
+ * other.
+ */
+@Composable
+private fun UpdateCard(updates: UpdateController) {
+    val ctx = LocalContext.current
+    val status by updates.status.collectAsState()
+
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text("Updates", Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
+                Text(
+                    "v" + updates.currentVersionLabel,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+
+            Text(
+                updates.summary(status),
+                style = MaterialTheme.typography.bodySmall,
+                color = if (status is Updater.Status.Failed) {
+                    MaterialTheme.colorScheme.error
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+            )
+
+            if (status is Updater.Status.Downloading) {
+                val percent = (status as Updater.Status.Downloading).percent
+                LinearProgressIndicator(
+                    progress = { percent / 100f },
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                when (val current = status) {
+                    is Updater.Status.Available -> {
+                        Button(onClick = { updates.install(current.release) }) {
+                            Text("Install " + current.release.tag)
+                        }
+                        if (!Updater.canRequestInstalls(ctx)) {
+                            OutlinedButton(onClick = { ctx.openInstallPermission() }) {
+                                Text("Allow installs")
+                            }
+                        }
+                    }
+
+                    is Updater.Status.Downloading,
+                    is Updater.Status.Verifying,
+                    is Updater.Status.Installing,
+                    is Updater.Status.Checking,
+                    -> Unit
+
+                    else -> OutlinedButton(onClick = { updates.check() }) {
+                        Text("Check for updates")
+                    }
+                }
+                TextButton(onClick = { ctx.openReleases() }) { Text("Releases") }
+            }
+
+            Text(
+                "The download must be signed with the same key as this app or it is refused " +
+                    "before the installer ever sees it.",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun Context.openInstallPermission() {
+    runCatching {
+        startActivity(
+            Intent(
+                Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                Uri.parse("package:" + packageName),
+            ).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
+    }
+}
+
+private fun Context.openReleases() {
+    runCatching {
+        startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(Updater.RELEASES_URL))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 }
 

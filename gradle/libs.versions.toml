@@ -17,6 +17,7 @@ playServicesWearable = "20.0.1"
 
 wearCompose = "1.6.2"
 wearToolingPreview = "1.0.0"
+wear = "1.4.0"
 protolayout = "1.4.2"
 tiles = "1.6.2"
 guava = "33.4.8-android"
@@ -44,6 +45,7 @@ wear-compose-material3 = { module = "androidx.wear.compose:compose-material3", v
 wear-compose-foundation = { module = "androidx.wear.compose:compose-foundation", version.ref = "wearCompose" }
 wear-compose-ui-tooling = { module = "androidx.wear.compose:compose-ui-tooling", version.ref = "wearCompose" }
 wear-tooling-preview = { module = "androidx.wear:wear-tooling-preview", version.ref = "wearToolingPreview" }
+wear = { module = "androidx.wear:wear", version.ref = "wear" }
 
 protolayout = { module = "androidx.wear.protolayout:protolayout", version.ref = "protolayout" }
 protolayout-expression = { module = "androidx.wear.protolayout:protolayout-expression", version.ref = "protolayout" }

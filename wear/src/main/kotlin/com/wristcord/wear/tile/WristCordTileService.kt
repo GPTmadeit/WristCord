@@ -4,18 +4,19 @@ import android.content.Context
 import androidx.wear.protolayout.ActionBuilders
 import androidx.wear.protolayout.DimensionBuilders.dp
 import androidx.wear.protolayout.DimensionBuilders.expand
+import androidx.wear.protolayout.DimensionBuilders.weight
 import androidx.wear.protolayout.LayoutElementBuilders.LayoutElement
 import androidx.wear.protolayout.LayoutElementBuilders.Spacer
 import androidx.wear.protolayout.ModifiersBuilders.Clickable
 import androidx.wear.protolayout.layout.column
-import androidx.wear.protolayout.material3.ButtonDefaults.filledTonalButtonColors
-import androidx.wear.protolayout.material3.ButtonDefaults.filledVariantButtonColors
+import androidx.wear.protolayout.material3.ButtonColors
 import androidx.wear.protolayout.material3.MaterialScope
 import androidx.wear.protolayout.material3.buttonGroup
 import androidx.wear.protolayout.material3.primaryLayout
 import androidx.wear.protolayout.material3.text
 import androidx.wear.protolayout.material3.textButton
 import androidx.wear.protolayout.modifiers.clickable
+import androidx.wear.protolayout.types.argb
 import androidx.wear.protolayout.types.layoutString
 import androidx.wear.tiles.Material3TileService
 import androidx.wear.tiles.RequestBuilders.TileRequest
@@ -23,19 +24,18 @@ import androidx.wear.tiles.TileBuilders.Tile
 import androidx.wear.tiles.tile
 import androidx.wear.tiles.timeline
 import androidx.wear.tiles.timelineEntry
-import com.wristcord.shared.Toggle
+import com.wristcord.shared.Brand
+import com.wristcord.shared.RemoteAction
+import com.wristcord.shared.Slot
 import com.wristcord.shared.VoiceState
-import com.wristcord.shared.Wire
 import com.wristcord.wear.MainActivity
+import com.wristcord.wear.link.SlotConfig
 import com.wristcord.wear.link.StateStore
 
 /**
- * The four-button tile: Mute, Deafen, Output, Disconnect.
- *
- * Mute and Deafen carry live on/off state read from [StateStore], which the phone keeps
- * current through the Data Layer - the tile can be rendered in a cold process and still show
- * the truth. Taps go straight to the phone without opening the watch app; only Output needs
- * a screen, because it is a list.
+ * The tile mirrors the app: the CENTRE slot gets a full-width primary button, the other three
+ * sit under it. Same Google colours, same slot assignments - change the layout in Settings and
+ * the tile follows, because both read [SlotConfig].
  */
 class WristCordTileService : Material3TileService() {
 
@@ -43,13 +43,14 @@ class WristCordTileService : Material3TileService() {
         val ctx = this@WristCordTileService
         val state = StateStore.readSync(ctx)
         val error = StateStore.readErrorSync(ctx)
+        val slots = SlotConfig.readSync(ctx)
 
         return tile(
             timeline = timeline(
                 timelineEntry(
                     primaryLayout(
                         titleSlot = { text(titleFor(state).layoutString) },
-                        mainSlot = { buttonGrid(ctx, state) },
+                        mainSlot = { buttonGrid(ctx, state, slots) },
                         bottomSlot = { text(footerFor(state, error).layoutString) },
                     )
                 )
@@ -57,69 +58,83 @@ class WristCordTileService : Material3TileService() {
         )
     }
 
-    private fun MaterialScope.buttonGrid(ctx: Context, state: VoiceState): LayoutElement = column(
-        buttonGroup(height = expand()) {
-            buttonGroupItem {
-                actionButton(
-                    label = if (state.muted == Toggle.ON) "Unmute" else "Mute",
-                    clickable = commandClickable(ctx, "mute", Wire.PATH_MUTE),
-                    highlighted = state.muted == Toggle.ON,
-                )
-            }
-            buttonGroupItem {
-                actionButton(
-                    label = if (state.deafened == Toggle.ON) "Undeafen" else "Deafen",
-                    clickable = commandClickable(ctx, "deafen", Wire.PATH_DEAFEN),
-                    highlighted = state.deafened == Toggle.ON,
-                )
-            }
-        },
-        rowGap(),
-        buttonGroup(height = expand()) {
-            buttonGroupItem {
-                actionButton(
-                    label = "Output",
-                    clickable = openOutputsClickable(ctx),
-                    highlighted = false,
-                )
-            }
-            buttonGroupItem {
-                actionButton(
-                    label = "Leave",
-                    clickable = commandClickable(ctx, "disconnect", Wire.PATH_DISCONNECT),
-                    highlighted = true,
-                )
-            }
-        },
-        width = expand(),
-        height = expand(),
-    )
+    private fun MaterialScope.buttonGrid(
+        ctx: Context,
+        state: VoiceState,
+        slots: Map<Slot, RemoteAction>,
+    ): LayoutElement {
+        val centre = slots[Slot.CENTRE] ?: Slot.CENTRE.default
+        val others = listOf(Slot.LEFT, Slot.RIGHT, Slot.BOTTOM)
+            .map { slots[it] ?: it.default }
+            .filter { it != RemoteAction.NONE }
 
-    /** protolayout-material3's own verticalSpacer is internal, so build the Spacer directly. */
-    private fun rowGap(): LayoutElement =
-        Spacer.Builder().setHeight(dp(SPACING_DP.toFloat())).build()
+        return column(
+            // Primary row is deliberately taller - the same "one button you can hit blind"
+            // idea the app's centre disc is built around.
+            buttonGroup(height = weight(1.5f)) {
+                buttonGroupItem {
+                    actionButton(ctx, centre, centre.centreLabelFor(state), engaged(centre, state))
+                }
+            },
+            rowGap(),
+            buttonGroup(height = weight(1f)) {
+                others.forEach { action ->
+                    buttonGroupItem {
+                        actionButton(ctx, action, action.label, engaged(action, state))
+                    }
+                }
+            },
+            width = expand(),
+            height = expand(),
+        )
+    }
 
     private fun MaterialScope.actionButton(
+        ctx: Context,
+        action: RemoteAction,
         label: String,
-        clickable: Clickable,
-        highlighted: Boolean,
+        engaged: Boolean,
     ): LayoutElement = textButton(
-        onClick = clickable,
+        onClick = clickableFor(ctx, action),
         labelContent = { text(label.layoutString) },
         width = expand(),
         height = expand(),
-        colors = if (highlighted) filledVariantButtonColors() else filledTonalButtonColors(),
+        colors = colorsFor(action, engaged),
     )
+
+    /** Engaged fills with the action's colour; resting is a dark disc with a coloured label. */
+    private fun colorsFor(action: RemoteAction, engaged: Boolean): ButtonColors = if (engaged) {
+        ButtonColors(
+            containerColor = action.accent.argb,
+            iconColor = onAccent(action).argb,
+            labelColor = onAccent(action).argb,
+            secondaryLabelColor = onAccent(action).argb,
+        )
+    } else {
+        ButtonColors(
+            containerColor = Brand.SURFACE_HIGH.argb,
+            iconColor = action.accent.argb,
+            labelColor = action.accent.argb,
+            secondaryLabelColor = Brand.ON_SURFACE_VARIANT.argb,
+        )
+    }
+
+    private fun onAccent(action: RemoteAction): Int =
+        if (action == RemoteAction.DEAFEN) Brand.INK else 0xFFFFFFFF.toInt()
+
+    private fun MaterialScope.clickableFor(ctx: Context, action: RemoteAction): Clickable =
+        if (action.opensList) openOutputsClickable(ctx) else commandClickable(ctx, action)
 
     /**
      * Preferred path: a PendingIntent the renderer fires directly, so the tap is handled
      * without leaving the carousel. Renderers without PENDING_INTENT_ACTION get a LaunchAction
-     * to [TileActionActivity], which does exactly the same thing and closes itself.
+     * to [TileActionActivity], which does the same thing and closes itself.
      */
-    private fun MaterialScope.commandClickable(ctx: Context, id: String, path: String): Clickable =
-        protoLayoutScope.clickable(
+    private fun MaterialScope.commandClickable(ctx: Context, action: RemoteAction): Clickable {
+        val path = action.path ?: return clickable(id = action.id)
+        return protoLayoutScope.clickable(
             pendingIntent = TileActionReceiver.pendingIntent(ctx, path),
-            id = id,
+            id = action.id,
             fallbackAction = ActionBuilders.LaunchAction.Builder()
                 .setAndroidActivity(
                     ActionBuilders.AndroidActivity.Builder()
@@ -133,6 +148,7 @@ class WristCordTileService : Material3TileService() {
                 )
                 .build(),
         )
+    }
 
     /** Output is a list, so this one deliberately opens the watch app on that screen. */
     private fun openOutputsClickable(ctx: Context): Clickable = clickable(
@@ -150,6 +166,24 @@ class WristCordTileService : Material3TileService() {
             .build(),
         id = "output",
     )
+
+    /** protolayout-material3's own verticalSpacer is internal, so build the Spacer directly. */
+    private fun rowGap(): LayoutElement =
+        Spacer.Builder().setHeight(dp(SPACING_DP.toFloat())).build()
+
+    private fun engaged(action: RemoteAction, state: VoiceState): Boolean = when (action) {
+        RemoteAction.MUTE -> state.muted == com.wristcord.shared.Toggle.ON
+        RemoteAction.DEAFEN -> state.deafened == com.wristcord.shared.Toggle.ON
+        else -> false
+    }
+
+    private fun RemoteAction.centreLabelFor(state: VoiceState): String = when (this) {
+        RemoteAction.MUTE -> if (state.muted == com.wristcord.shared.Toggle.ON) "Unmute" else "Mute"
+        RemoteAction.DEAFEN ->
+            if (state.deafened == com.wristcord.shared.Toggle.ON) "Undeafen" else "Deafen"
+
+        else -> label
+    }
 
     private fun titleFor(state: VoiceState): String = when {
         state.channel.isNotBlank() -> state.channel

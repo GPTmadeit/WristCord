@@ -4,22 +4,18 @@
     android:height="192dp"
     android:viewportWidth="192"
     android:viewportHeight="192">
-    <path
-        android:fillColor="#1E1F22"
-        android:pathData="M0,0h192v192h-192z" />
-    <path
-        android:fillColor="#5865F2"
-        android:pathData="M14,56h78v40h-78z" />
-    <path
-        android:fillColor="#3A3C42"
-        android:pathData="M100,56h78v40h-78z" />
-    <path
-        android:fillColor="#3A3C42"
-        android:pathData="M14,102h78v40h-78z" />
-    <path
-        android:fillColor="#ED4245"
-        android:pathData="M100,102h78v40h-78z" />
-    <path
-        android:fillColor="#FFFFFF"
-        android:pathData="M96,20m-8,0a8,8 0,1 0,16 0a8,8 0,1 0,-16 0" />
+    <path android:fillColor="#000000" android:pathData="M0,0h192v192h-192z" />
+    <!-- title -->
+    <path android:fillColor="#5F6368" android:pathData="M66,26h60v7h-60z" />
+    <!-- primary row: the CENTRE slot, filled in its own colour -->
+    <path android:fillColor="#4285F4" android:pathData="M18,48h156v58a8,8 0 0 1 -8,8h-140a8,8 0 0 1 -8,-8z" />
+    <path android:fillColor="#FFFFFF" android:pathData="M96,66m-7,0a7,7 0 1 0,14 0a7,7 0 1 0,-14 0" />
+    <path android:fillColor="#FFFFFF" android:pathData="M84,86h24v6h-24z" />
+    <!-- three satellites -->
+    <path android:fillColor="#303134" android:pathData="M18,122h48v40h-48z" />
+    <path android:fillColor="#FBBC04" android:pathData="M34,138h16v8h-16z" />
+    <path android:fillColor="#303134" android:pathData="M72,122h48v40h-48z" />
+    <path android:fillColor="#34A853" android:pathData="M88,138h16v8h-16z" />
+    <path android:fillColor="#303134" android:pathData="M126,122h48v40h-48z" />
+    <path android:fillColor="#EA4335" android:pathData="M142,138h16v8h-16z" />
 </vector>
