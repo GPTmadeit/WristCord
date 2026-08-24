@@ -12,7 +12,7 @@
     <!-- Ongoing Activity chip on the watch face while a call is up. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
 
     <application
         android:allowBackup="false"
@@ -137,7 +137,11 @@
         <service
             android:name="com.wristcord.wear.link.OngoingService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Shows an Ongoing Activity chip on the watch face while the paired phone is in a Discord voice call, so the call can be muted or left from the watch face. Not connectedDevice: this app holds no Bluetooth connection, the link runs over the Wearable Data Layer." />
+        </service>
 
         <!-- Watch-face complication: mute state at a glance, one tap to open the remote. -->
         <service

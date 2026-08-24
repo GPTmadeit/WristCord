@@ -7,9 +7,9 @@ import android.app.Service
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
-import android.graphics.drawable.Icon
 import android.os.Build
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.wear.ongoing.OngoingActivity
 import androidx.wear.ongoing.Status
@@ -31,6 +31,12 @@ import kotlinx.coroutines.launch
  *
  * Optional, and it stops itself the moment the call ends, so nothing is running when there is
  * nothing to control.
+ *
+ * Uses the `specialUse` foreground service type rather than `connectedDevice`: since API 34 the
+ * latter is only permitted when a Bluetooth runtime permission is *granted*, and WristCord holds
+ * no Bluetooth connection of its own - it talks to the phone through Play services' Data Layer.
+ * Asking for a permission the app never uses, just to satisfy a type check, is not a trade worth
+ * making.
  */
 class OngoingService : Service() {
 
@@ -42,7 +48,12 @@ class OngoingService : Service() {
         super.onCreate()
         StateStore.load(this)
         createChannel()
-        pushNotification(StateStore.state.value)
+
+        // A refused foreground start must not take the watch app down with it.
+        if (!pushNotification(StateStore.state.value)) {
+            stopSelf()
+            return
+        }
 
         scope.launch {
             StateStore.state.collectLatest { state ->
@@ -50,7 +61,7 @@ class OngoingService : Service() {
                     stopSelf()
                     return@collectLatest
                 }
-                pushNotification(state)
+                if (!pushNotification(state)) stopSelf()
             }
         }
     }
@@ -62,7 +73,8 @@ class OngoingService : Service() {
         super.onDestroy()
     }
 
-    private fun pushNotification(state: VoiceState) {
+    /** @return true when the chip is up; false means we logged why and should stand down. */
+    private fun pushNotification(state: VoiceState): Boolean {
         val open = PendingIntent.getActivity(
             this,
             0,
@@ -89,23 +101,29 @@ class OngoingService : Service() {
             .setCategory(NotificationCompat.CATEGORY_CALL)
             .setPriority(NotificationCompat.PRIORITY_LOW)
 
-        OngoingActivity.Builder(applicationContext, NOTIFICATION_ID, builder)
-            .setStaticIcon(R.drawable.ic_tile)
-            .setAnimatedIcon(R.drawable.ic_tile)
-            .setTouchIntent(open)
-            .setStatus(Status.Builder().addTemplate("$title · $line").build())
-            .build()
-            .apply(applicationContext)
+        return try {
+            OngoingActivity.Builder(applicationContext, NOTIFICATION_ID, builder)
+                .setStaticIcon(R.drawable.ic_tile)
+                .setTouchIntent(open)
+                .setStatus(Status.Builder().addTemplate("$title · $line").build())
+                .build()
+                .apply(applicationContext)
 
-        val notification = builder.build()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-            startForeground(
-                NOTIFICATION_ID,
-                notification,
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE,
-            )
-        } else {
-            startForeground(NOTIFICATION_ID, notification)
+            val notification = builder.build()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                startForeground(
+                    NOTIFICATION_ID,
+                    notification,
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+                )
+            } else {
+                // Type enforcement starts at API 34; below that the plain call is correct.
+                startForeground(NOTIFICATION_ID, notification)
+            }
+            true
+        } catch (t: Throwable) {
+            Log.w(TAG, "could not show the watch face chip", t)
+            false
         }
     }
 
@@ -122,6 +140,7 @@ class OngoingService : Service() {
     }
 
     companion object {
+        private const val TAG = "WristCord/Ongoing"
         private const val CHANNEL_ID = "wristcord_ongoing"
         private const val NOTIFICATION_ID = 8123
         private const val PREFS = "wristcord_ongoing"
@@ -142,7 +161,7 @@ class OngoingService : Service() {
         private fun start(ctx: Context) {
             runCatching {
                 ctx.startForegroundService(Intent(ctx, OngoingService::class.java))
-            }
+            }.onFailure { Log.w(TAG, "could not start the ongoing service", it) }
         }
 
         private fun stop(ctx: Context) {

@@ -14,7 +14,7 @@
     <!-- Optional status notification, and restoring it after a reboot. -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CONNECTED_DEVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
 
     <!-- We only ever look at one other package. -->
@@ -125,7 +125,11 @@
         <service
             android:name="com.wristcord.mobile.link.StatusService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="specialUse">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Keeps a status notification showing whether the paired watch is reachable and what the Discord call is doing, with mute and leave actions. Not connectedDevice: this app holds no Bluetooth connection, the link runs over the Wearable Data Layer." />
+        </service>
 
         <receiver
             android:name="com.wristcord.mobile.link.StatusActionReceiver"

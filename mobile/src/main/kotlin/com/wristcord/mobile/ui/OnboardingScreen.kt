@@ -62,6 +62,8 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.LaunchedEffect
 import com.wristcord.R
 import com.wristcord.mobile.diagnostics.Probe
@@ -428,11 +430,28 @@ private fun EventsCard(events: List<String>) {
  * notification listener already keeps the process alive and Play services starts the message
  * listener on demand. What this buys is a visible link status and some insurance against
  * aggressive battery managers.
+ *
+ * Two things have to line up before the switch can do anything, and both of them can fail in
+ * ways that are the user's to resolve, so both are reported here rather than thrown:
+ * POST_NOTIFICATIONS has to be granted (API 33+), and the system has to actually allow the
+ * foreground service to start.
  */
 @Composable
 private fun BackgroundCard() {
     val ctx = LocalContext.current
     var enabled by remember { mutableStateOf(StatusService.isEnabled(ctx)) }
+    var denied by remember { mutableStateOf(false) }
+    val problem by StatusService.problem.collectAsState()
+
+    val askForNotifications = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        denied = !granted
+        if (granted) {
+            enabled = true
+            StatusService.setEnabled(ctx, true)
+        }
+    }
 
     Card(Modifier.fillMaxWidth()) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -449,12 +468,44 @@ private fun BackgroundCard() {
                 Spacer(Modifier.width(12.dp))
                 Switch(
                     checked = enabled,
-                    onCheckedChange = {
-                        enabled = it
-                        StatusService.setEnabled(ctx, it)
+                    onCheckedChange = { want ->
+                        denied = false
+                        when {
+                            !want -> {
+                                enabled = false
+                                StatusService.setEnabled(ctx, false)
+                            }
+
+                            StatusService.canPostNotifications(ctx) -> {
+                                enabled = true
+                                StatusService.setEnabled(ctx, true)
+                            }
+
+                            else -> askForNotifications.launch(
+                                android.Manifest.permission.POST_NOTIFICATIONS
+                            )
+                        }
                     },
                 )
             }
+
+            val trouble = when {
+                denied -> "Notification permission denied, so there is nowhere to show this. " +
+                    "Grant it in Android settings and try again."
+
+                problem != null -> "Android would not start it: $problem"
+                else -> null
+            }
+
+            if (trouble != null) {
+                Text(
+                    trouble,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.error,
+                )
+                OutlinedButton(onClick = { ctx.openAppSettings() }) { Text("App settings") }
+            }
+
             Text(
                 "Optional. Everything works with this off.",
                 style = MaterialTheme.typography.labelSmall,
@@ -643,6 +694,15 @@ private fun UpdateCard(updates: UpdateController) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+private fun Context.openAppSettings() {
+    runCatching {
+        startActivity(
+            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:" + packageName))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
 }
 

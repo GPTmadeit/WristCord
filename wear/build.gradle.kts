@@ -12,8 +12,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkWear.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.2.1"
 
         // No Wear OS watch is x86; shipping those slices only inflates the download the
         // watch has to pull over Wi-Fi when it updates itself.

@@ -219,8 +219,18 @@ optional and both are off-switchable.
 
 **Phone — status notification.** A quiet ongoing notification showing whether the watch is
 reachable, what channel you are in, and the mute state, with **Mute** and **Leave** as actions
-in the shade. Toggle it on the main screen; it survives a reboot. Runs as a
-`connectedDevice` foreground service.
+in the shade. Toggle it on the main screen; it survives a reboot.
+
+Both foreground services use the **`specialUse`** service type, not `connectedDevice`. That is
+deliberate: since API 34, `connectedDevice` is only permitted when one of a fixed permission
+list is *granted*, and the only ones that fit are Bluetooth runtime permissions. WristCord holds
+no Bluetooth connection — it talks to the watch through Play services' Data Layer — so declaring
+`BLUETOOTH_CONNECT` and prompting for it would be asking for a permission the app never uses,
+purely to satisfy a type check. `specialUse` needs no runtime permission and is honest about
+what this is.
+
+Neither service can take the app down if the system refuses the start: both catch the failure,
+stand down, and report the reason (on the phone, right in the card next to the switch).
 
 **Watch — watch-face chip.** While a call is running, WristCord publishes an
 [Ongoing Activity](https://developer.android.com/training/wearables/ongoing-activity), the same

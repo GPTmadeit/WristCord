@@ -1,5 +1,6 @@
 package com.wristcord.mobile.link
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -8,10 +9,12 @@ import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import androidx.core.app.NotificationCompat
+import androidx.core.content.ContextCompat
 import com.wristcord.R
 import com.wristcord.mobile.discord.DiscordController
 import com.wristcord.mobile.ui.MainActivity
@@ -27,6 +30,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
@@ -37,9 +42,17 @@ import kotlinx.coroutines.tasks.await
  *
  * WristCord already works without this - the notification listener keeps the process alive and
  * Play services starts the message listener on demand. What a foreground service buys is
- * visibility (you can see at a glance that the link is up) and a little insurance against
- * aggressive battery managers on some phones. It is off by default because a permanent
- * notification is a real cost, and nothing depends on it.
+ * visibility and a little insurance against aggressive battery managers. It is off by default
+ * because a permanent notification is a real cost, and nothing depends on it.
+ *
+ * ## Why specialUse and not connectedDevice
+ *
+ * `connectedDevice` looks like the obvious type, but Android 14+ only lets you use it if one of
+ * a fixed permission list is *granted* - and the only ones that fit are Bluetooth runtime
+ * permissions. WristCord does not hold a Bluetooth connection: it talks to the watch through
+ * Play services' Data Layer. Declaring BLUETOOTH_CONNECT to satisfy a type check, and then
+ * prompting the user for a permission the app never uses, would be dishonest. `specialUse` is
+ * the type that exists for exactly this - and it needs no runtime permission.
  */
 class StatusService : Service() {
 
@@ -54,21 +67,20 @@ class StatusService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        startForeground(
-            NOTIFICATION_ID,
-            build(StatePublisher.get(this).state.value),
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
-                ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-            } else {
-                0
-            },
-        )
+
+        // A foreground start can be refused for reasons outside our control (type rules,
+        // background-start limits, OEM policy). Whatever happens, it degrades to a message -
+        // it does not take the app down with it.
+        if (!enterForeground(StatePublisher.get(this).state.value)) {
+            stopSelf()
+            return
+        }
+
+        _problem.value = null
         EventLog.i(TAG, "status notification on")
 
         scope.launch {
-            StatePublisher.get(this@StatusService).state.collectLatest { state ->
-                notify(state)
-            }
+            StatePublisher.get(this@StatusService).state.collectLatest { state -> notify(state) }
         }
         watchJob = scope.launch {
             while (true) {
@@ -102,6 +114,29 @@ class StatusService : Service() {
         scope.cancel()
         EventLog.i(TAG, "status notification off")
         super.onDestroy()
+    }
+
+    /** @return true when we are actually in the foreground; false means we told the user why. */
+    private fun enterForeground(state: VoiceState): Boolean = try {
+        val notification = build(state)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            startForeground(
+                NOTIFICATION_ID,
+                notification,
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE,
+            )
+        } else {
+            // Type enforcement starts at API 34; below that the plain call is the correct one.
+            startForeground(NOTIFICATION_ID, notification)
+        }
+        true
+    } catch (t: Throwable) {
+        val why = t.message ?: t.javaClass.simpleName
+        EventLog.e(TAG, "could not start the status notification: $why")
+        _problem.value = why
+        // Do not leave the preference on when the thing it enables cannot run.
+        prefs(this).edit().putBoolean(KEY_ENABLED, false).apply()
+        false
     }
 
     private fun notify(state: VoiceState) {
@@ -181,16 +216,19 @@ class StatusService : Service() {
 
     private fun createChannel() {
         val manager = getSystemService(NotificationManager::class.java) ?: return
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "WristCord status",
-            NotificationManager.IMPORTANCE_LOW,
-        ).apply {
-            description = "Shows whether the watch link is up and what Discord is doing."
-            setShowBadge(false)
-            enableVibration(false)
+        runCatching {
+            manager.createNotificationChannel(
+                NotificationChannel(
+                    CHANNEL_ID,
+                    "WristCord status",
+                    NotificationManager.IMPORTANCE_LOW,
+                ).apply {
+                    description = "Shows whether the watch link is up and what Discord is doing."
+                    setShowBadge(false)
+                    enableVibration(false)
+                }
+            )
         }
-        manager.createNotificationChannel(channel)
     }
 
     companion object {
@@ -203,12 +241,31 @@ class StatusService : Service() {
 
         const val ACTION_STOP = "com.wristcord.STATUS_STOP"
 
-        fun isEnabled(ctx: Context): Boolean =
-            prefs(ctx).getBoolean(KEY_ENABLED, false)
+        private val _problem = MutableStateFlow<String?>(null)
+
+        /** Why the status notification is not running, or null. Surfaced on the phone screen. */
+        val problem: StateFlow<String?> = _problem
+
+        fun isEnabled(ctx: Context): Boolean = prefs(ctx).getBoolean(KEY_ENABLED, false)
+
+        /** True on API 33+ only once the user has actually granted the runtime permission. */
+        fun canPostNotifications(ctx: Context): Boolean =
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) ==
+                    PackageManager.PERMISSION_GRANTED
+            } else {
+                true
+            }
 
         fun setEnabled(ctx: Context, enabled: Boolean) {
             prefs(ctx).edit().putBoolean(KEY_ENABLED, enabled).apply()
-            if (enabled) start(ctx) else stop(ctx)
+            if (enabled) {
+                _problem.value = null
+                start(ctx)
+            } else {
+                _problem.value = null
+                stop(ctx)
+            }
         }
 
         /** Called on boot and on app start so the choice survives a restart. */
@@ -219,7 +276,12 @@ class StatusService : Service() {
         private fun start(ctx: Context) {
             runCatching {
                 ctx.startForegroundService(Intent(ctx, StatusService::class.java))
-            }.onFailure { EventLog.e(TAG, "could not start status service: ${it.message}") }
+            }.onFailure {
+                val why = it.message ?: it.javaClass.simpleName
+                EventLog.e(TAG, "could not start status service: $why")
+                _problem.value = why
+                prefs(ctx).edit().putBoolean(KEY_ENABLED, false).apply()
+            }
         }
 
         private fun stop(ctx: Context) {
