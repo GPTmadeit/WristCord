@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Belt and braces. Resource shrinking is off in the build files, but if it is ever switched
+    back on, this is the documented way to tell the shrinker that a resource nothing references
+    is still needed. android_wear_capabilities is read by Google Play services, by name, from
+    another process - the shrinker has no way to see that on its own.
+-->
+<resources xmlns:tools="http://schemas.android.com/tools"
+    tools:keep="@array/android_wear_capabilities" />

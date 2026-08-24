@@ -76,11 +76,13 @@ import com.wristcord.mobile.link.StatePublisher
 import com.wristcord.mobile.link.StatusService
 import com.wristcord.mobile.util.EventLog
 import com.wristcord.shared.Brand
+import com.wristcord.shared.Capabilities
 import com.wristcord.shared.IconVariant
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
 import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
+import com.wristcord.shared.Wire
 import kotlinx.coroutines.delay
 import java.io.File
 
@@ -90,6 +92,10 @@ private data class Grants(
     val notificationConnected: Boolean,
     val accessibilityGranted: Boolean,
     val accessibilityConnected: Boolean,
+    /** This phone is advertising wristcord_phone to the Data Layer. */
+    val advertising: Boolean,
+    /** A watch running WristCord is reachable right now. */
+    val watchReachable: Boolean,
 ) {
     companion object {
         fun read(ctx: Context) = Grants(
@@ -98,6 +104,8 @@ private data class Grants(
             notificationConnected = DiscordNotificationListener.connected() != null,
             accessibilityGranted = DiscordAccessibilityService.isGranted(ctx),
             accessibilityConnected = DiscordAccessibilityService.connected() != null,
+            advertising = false,
+            watchReachable = false,
         )
     }
 }
@@ -113,6 +121,17 @@ private fun rememberGrants(): Grants {
             while (true) {
                 grants = Grants.read(ctx)
                 delay(700)
+            }
+        }
+    }
+    // The Data Layer checks are round trips, so they run on their own slower loop.
+    LaunchedEffect(owner) {
+        owner.lifecycle.repeatOnLifecycle(Lifecycle.State.RESUMED) {
+            while (true) {
+                val advertising = Capabilities.localAdvertises(ctx, Wire.CAPABILITY_PHONE)
+                val reachable = Capabilities.peerReachable(ctx, Wire.CAPABILITY_WATCH)
+                grants = grants.copy(advertising = advertising, watchReachable = reachable)
+                delay(5_000)
             }
         }
     }
@@ -145,6 +164,7 @@ fun OnboardingScreen(updates: UpdateController) {
             )
 
             PermissionsCard(grants)
+            WatchLinkCard(grants)
             StatusCard(grants, state)
             BackgroundCard()
             AppearanceCard()
@@ -186,6 +206,78 @@ private fun PermissionsCard(grants: Grants) {
                 buttonText = "Open accessibility settings",
                 onClick = { ctx.openSettings(Settings.ACTION_ACCESSIBILITY_SETTINGS) },
             )
+        }
+    }
+}
+
+/**
+ * The watch link, made visible.
+ *
+ * This exists because of a real bug: R8's resource shrinker deleted the capability array that
+ * Play services reads to match the two apps, and the devices stopped finding each other with no
+ * crash, no log and nothing on screen. Anything that can fail silently should have a row that
+ * says so.
+ */
+@Composable
+private fun WatchLinkCard(grants: Grants) {
+    Card(Modifier.fillMaxWidth()) {
+        Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("Watch link", style = MaterialTheme.typography.titleMedium)
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(grants.advertising, grants.advertising)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        "This phone is discoverable",
+                        style = MaterialTheme.typography.bodyMedium,
+                    )
+                    Text(
+                        if (grants.advertising) {
+                            "Advertising wristcord_phone"
+                        } else {
+                            "Not advertising - the watch cannot find this phone"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (grants.advertising) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                StatusDot(grants.watchReachable, grants.watchReachable)
+                Spacer(Modifier.width(10.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("Watch reachable", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        if (grants.watchReachable) {
+                            "A watch running WristCord is connected"
+                        } else {
+                            "No watch found - check it is in range and has the same build"
+                        },
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (grants.watchReachable) {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        } else {
+                            MaterialTheme.colorScheme.error
+                        },
+                    )
+                }
+            }
+
+            if (!grants.watchReachable) {
+                Text(
+                    "Both APKs must share the applicationId and the signing certificate, and " +
+                        "both must be the same release. Play services will not route between " +
+                        "them otherwise.",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
         }
     }
 }

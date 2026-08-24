@@ -8,9 +8,12 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.wristcord.BuildConfig
+import com.wristcord.R
+import com.wristcord.shared.Capabilities
 import com.wristcord.shared.IconVariant
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
+import com.wristcord.shared.Wire
 import com.wristcord.wear.link.ArtworkStore
 import com.wristcord.wear.link.Commands
 import com.wristcord.wear.link.SlotConfig
@@ -35,6 +38,11 @@ class MainActivity : ComponentActivity() {
         SlotConfig.load(this)
         ArtworkStore.load(this)
         IconVariant.ensureApplied(this)
+        Capabilities.ensure(
+            ctx = this,
+            declared = resources.getStringArray(R.array.android_wear_capabilities),
+            expected = Wire.CAPABILITY_WATCH,
+        )
         openOutputs = intent?.getBooleanExtra(EXTRA_OPEN_OUTPUTS, false) == true
         setContent {
             WearApp(

@@ -14,8 +14,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkMobile.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 4
-        versionName = "1.2.1"
+        versionCode = 5
+        versionName = "1.3.0"
     }
 
     signingConfigs {
@@ -40,7 +40,13 @@ android {
             // of ART's full AOT/JIT optimisation and Compose keeps its tooling hooks live.
             // Release strips both, and R8 tree-shakes Compose down to what is actually used.
             isMinifyEnabled = true
-            isShrinkResources = true
+            // Resource shrinking stays OFF, deliberately. res/values/wear.xml declares the
+            // Data Layer capability as a string-array that nothing in this app references -
+            // Google Play services reads it out of the APK by name, from another process. The
+            // shrinker cannot see that, deleted it in v1.1.0, and the two devices silently
+            // stopped finding each other. The dex shrinking above is where the size win came
+            // from anyway; this part is not worth the failure mode.
+            isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

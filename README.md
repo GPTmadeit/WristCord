@@ -336,6 +336,20 @@ the wrist still produces a readable stack trace and no manifest-resolved compone
 broken by obfuscation. The wear build also drops the x86 native slices, which no watch needs
 and which the watch would otherwise have to download over Wi-Fi on every update.
 
+**Resource shrinking is off, deliberately.** `res/values/wear.xml` declares the Data Layer
+capability as a string-array that nothing in this app references - Google Play services reads it
+out of the APK by name, from another process. The resource shrinker cannot see a cross-process
+by-name lookup, so in v1.1.0 it deleted the array and the two devices silently stopped finding
+each other: no crash, no log, nothing on screen. Dex shrinking is where the size win actually
+came from; resource shrinking was buying a few hundred KB in exchange for that failure mode.
+
+Three guards now, because the failure is silent:
+[`res/raw/keep.xml`](wear/src/main/res/raw/keep.xml) names the array the documented way,
+[`Capabilities.ensure`](shared/kotlin/com/wristcord/shared/Capabilities.kt) reads it through
+`R.array` (which makes it a referenced resource) and re-registers it at runtime with
+`addLocalCapability`, and the phone's **Watch link** card shows whether the phone is actually
+advertising and whether a watch answers.
+
 Also fixed: `com.wristcord.shared.*` is declared stable to the Compose compiler
 ([`compose-stability.conf`](compose-stability.conf)). `VoiceState` holds a `List`, so without
 that declaration every state push from the phone recomposed the entire remote.

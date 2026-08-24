@@ -6,6 +6,7 @@ import com.google.android.gms.wearable.Wearable
 import com.wristcord.mobile.discord.DiscordController
 import com.wristcord.mobile.util.EventLog
 import com.wristcord.shared.ActionResult
+import com.wristcord.shared.Capabilities
 import com.wristcord.shared.Wire
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.tasks.await
@@ -52,6 +53,13 @@ class PhoneWearableListenerService : WearableListenerService() {
 
     override fun onCreate() {
         super.onCreate()
+        // Play services starts this without the app ever being opened, so the capability guard
+        // belongs here as well as in the activity.
+        Capabilities.ensure(
+            ctx = this,
+            declared = resources.getStringArray(com.wristcord.R.array.android_wear_capabilities),
+            expected = Wire.CAPABILITY_PHONE,
+        )
         StatePublisher.get(applicationContext).refresh("listener service created")
     }
 

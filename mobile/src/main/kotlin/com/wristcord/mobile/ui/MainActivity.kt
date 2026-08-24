@@ -14,10 +14,13 @@ import com.wristcord.BuildConfig
 import com.wristcord.mobile.link.IconSync
 import com.wristcord.mobile.link.StatePublisher
 import com.wristcord.mobile.link.StatusService
+import com.wristcord.R
 import com.wristcord.shared.Brand
+import com.wristcord.shared.Capabilities
 import com.wristcord.shared.IconVariant
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
+import com.wristcord.shared.Wire
 
 class MainActivity : ComponentActivity() {
 
@@ -34,6 +37,13 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         IconVariant.ensureApplied(this)
         StatusService.startIfEnabled(this)
+        // Reads R.array (which keeps the resource alive) and re-registers the capability
+        // at runtime. See Capabilities for why this is not paranoia.
+        Capabilities.ensure(
+            ctx = this,
+            declared = resources.getStringArray(R.array.android_wear_capabilities),
+            expected = Wire.CAPABILITY_PHONE,
+        )
         setContent {
             WristCordTheme {
                 OnboardingScreen(updates = updates)

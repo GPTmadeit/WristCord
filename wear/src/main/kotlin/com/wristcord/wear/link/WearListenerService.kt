@@ -7,6 +7,7 @@ import com.google.android.gms.wearable.DataMapItem
 import com.google.android.gms.wearable.MessageEvent
 import com.google.android.gms.wearable.WearableListenerService
 import com.wristcord.shared.ActionResult
+import com.wristcord.shared.Capabilities
 import com.wristcord.shared.IconVariant
 import com.wristcord.shared.VoiceState
 import com.wristcord.shared.Wire
@@ -19,6 +20,17 @@ import kotlinx.coroutines.runBlocking
  * live Muted/Live label without anything of ours being open.
  */
 class WearListenerService : WearableListenerService() {
+
+    override fun onCreate() {
+        super.onCreate()
+        // Play services starts this without the activity ever running, so the capability
+        // guard belongs here too.
+        Capabilities.ensure(
+            ctx = this,
+            declared = resources.getStringArray(com.wristcord.R.array.android_wear_capabilities),
+            expected = Wire.CAPABILITY_WATCH,
+        )
+    }
 
     override fun onDataChanged(events: DataEventBuffer) {
         var latest: VoiceState? = null
