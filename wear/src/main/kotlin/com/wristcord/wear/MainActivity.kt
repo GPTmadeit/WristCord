@@ -38,6 +38,15 @@ class MainActivity : ComponentActivity() {
         if (BuildConfig.DEBUG && intent?.getBooleanExtra("com.wristcord.SELFTEST", false) == true) {
             Thread { com.wristcord.wear.voice.SelfTest.run(this) }.start()
         }
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("com.wristcord.MICTEST", false) == true) {
+            Thread { com.wristcord.wear.voice.SelfTest.mics(this) }.start()
+        }
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("com.wristcord.ENGINETEST", false) == true) {
+            Thread { com.wristcord.wear.voice.SelfTest.engine(this) }.start()
+        }
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("com.wristcord.SCOTEST", false) == true) {
+            Thread { com.wristcord.wear.voice.ScoProbe.run(this) }.start()
+        }
         if (BuildConfig.DEBUG && intent?.getBooleanExtra(Demo.EXTRA, false) == true) {
             Demo.load(
                 WristCordApp.of(this),

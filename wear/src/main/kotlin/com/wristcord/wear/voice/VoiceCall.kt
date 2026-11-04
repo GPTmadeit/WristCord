@@ -47,6 +47,8 @@ sealed interface CallState {
         val reconnecting: Boolean = false,
         /** The headset dropped: everything is muted until it is back or the call ends. */
         val headsetLost: Boolean = false,
+        /** Media audio to the headset, so you speak into the watch (see [AudioPath.MEDIA]). */
+        val watchMic: Boolean = false,
     ) : CallState
     /** Shown for a moment after a call ends for a reason the user did not choose. */
     data class Ended(val reason: String) : CallState
@@ -316,6 +318,7 @@ class VoiceCall(private val app: WristCordApp) {
             headset = device?.let(Headset::name) ?: "Headset",
             reconnecting = link is VoiceLinkState.Reconnecting,
             headsetLost = (s as? CallState.Live)?.headsetLost ?: false,
+            watchMic = engine?.path == AudioPath.MEDIA,
         )
     }
 
@@ -334,10 +337,12 @@ class VoiceCall(private val app: WristCordApp) {
             e2ee = true,
             privacyCode = "142857285714428571571428714285",
             headset = "Pixel Buds Pro 2",
+            watchMic = true,
         )
         _diagnostics.value = CallDiagnostics(
             VoiceStats(sent = 1520, received = 1874, delivered = 1702, protocolVersion = 1, daveReady = true),
-            AudioStats(captured = 3010, loud = 1530, encoded = 1520, decoded = 1702, played = 1650, micLevel = 2140, route = "Bluetooth call audio"),
+            AudioStats(captured = 3010, loud = 1530, encoded = 1520, decoded = 1702, played = 1650, micLevel = 2140,
+                route = "Bluetooth media audio", path = AudioPath.MEDIA.label),
             "Wi-Fi/LTE",
         )
     }

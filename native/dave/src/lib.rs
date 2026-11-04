@@ -13,6 +13,7 @@ use jni::objects::{JByteArray, JClass, JLongArray};
 use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
+mod opus;
 #[cfg(feature = "testing")]
 mod testing;
 

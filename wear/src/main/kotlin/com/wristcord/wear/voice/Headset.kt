@@ -13,8 +13,10 @@ import kotlinx.coroutines.flow.distinctUntilChanged
 
 /**
  * The rule for voice on the watch: **a wireless headset or nothing.** A call never plays out of
- * the watch's own speaker or listens through its own mic - joining is only offered while a
- * Bluetooth headset is connected, and losing it mid-call mutes and deafens at once.
+ * the watch's own speaker: joining is only offered while a Bluetooth headset is connected, and
+ * losing it mid-call mutes and deafens at once. The headset's mic is used when Android allows
+ * call audio to it; on a watch paired with a phone it refuses that for classic headsets, and
+ * the call then plays as media audio on the headset with the watch's mic ([AudioPath.MEDIA]).
  *
  * "Headset" means a device Android can route a call to: classic Bluetooth (HFP/SCO), LE Audio
  * headsets, and Bluetooth hearing aids. A2DP-only speakers cannot carry a call and do not count.
@@ -28,6 +30,22 @@ object Headset {
     )
 
     fun isWireless(d: AudioDeviceInfo) = d.type in WIRELESS
+
+    /** Outputs a headset can take media audio on, the fallback when call audio is refused. */
+    private val MEDIA_OUTPUTS = setOf(
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
+        AudioDeviceInfo.TYPE_BLE_HEADSET,
+        AudioDeviceInfo.TYPE_BLE_SPEAKER,
+        AudioDeviceInfo.TYPE_HEARING_AID,
+    )
+
+    /** The media-audio side of [headset] (same device, its A2DP output), if it has one. */
+    fun mediaOutput(ctx: Context, headset: AudioDeviceInfo): AudioDeviceInfo? {
+        val outputs = audio(ctx).getDevices(AudioManager.GET_DEVICES_OUTPUTS).filter { it.type in MEDIA_OUTPUTS }
+        return outputs.firstOrNull { it.address.isNotEmpty() && it.address == headset.address }
+            ?: outputs.firstOrNull { it.productName == headset.productName }
+            ?: outputs.singleOrNull()
+    }
 
     /** The watch's own speaker and mic: where a call must never end up. */
     private val BUILT_IN = setOf(

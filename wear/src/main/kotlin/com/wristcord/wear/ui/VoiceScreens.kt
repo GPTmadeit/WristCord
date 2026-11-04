@@ -130,6 +130,9 @@ fun VoiceChannelScreen(
         } else if (here && call is CallState.Live) row(spec, "e2ee") {
             Caption(encryptionLine(call), modifier, color = if (call.e2ee || call.securing) c.textMuted else c.textWarning)
         }
+        if (here && call is CallState.Live && call.watchMic) row(spec, "mic") {
+            Caption("Speak into the watch. Wear OS won't use your headset's mic while the watch is connected to your phone, so you hear the call on the headset and talk to the watch.", modifier)
+        }
         val d = diagnostics
         if (here && d != null) row(spec, "diag") {
             val (text, trouble) = diagnosticsText(d)
@@ -219,7 +222,8 @@ private fun diagnosticsText(d: CallDiagnostics): Pair<String, Boolean> {
     }
     val lines = listOf(
         "Sent ${l.sent} · received ${l.received} · heard ${l.delivered}",
-        "Mic ${a.micLevel} · played ${a.played} · ${a.route}",
+        "Mic ${a.micLevel}${if (a.micSource.isNotEmpty()) " (${a.micSource})" else ""} · played ${a.played}",
+        listOf(a.path, a.route).filter { it.isNotEmpty() }.joinToString(" → "),
         d.network,
     ) + problems
     return lines.joinToString("\n") to problems.isNotEmpty()

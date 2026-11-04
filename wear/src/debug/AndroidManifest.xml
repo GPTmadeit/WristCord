@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- Debug builds only: ScoProbe's Telecom check (a self-managed call asking for the headset).
+         Release builds do not use Telecom, so they do not ask for this. -->
+    <uses-permission android:name="android.permission.MANAGE_OWN_CALLS" />
+</manifest>

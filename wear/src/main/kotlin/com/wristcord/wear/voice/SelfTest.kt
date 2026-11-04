@@ -77,4 +77,89 @@ object SelfTest {
         Log.i(TAG, if (ok) "ALL PASS" else "SOME FAILED")
         return ok
     }
+
+    /** Debug builds only (`--ez com.wristcord.MICTEST true`): which mic sources deliver sound. */
+    @android.annotation.SuppressLint("MissingPermission")
+    fun mics(ctx: Context) {
+        val am = ctx.getSystemService(android.media.AudioManager::class.java)
+        val sources = listOf(
+            "VOICE_COMMUNICATION" to android.media.MediaRecorder.AudioSource.VOICE_COMMUNICATION,
+            "MIC" to android.media.MediaRecorder.AudioSource.MIC,
+            "VOICE_RECOGNITION" to android.media.MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            "CAMCORDER" to android.media.MediaRecorder.AudioSource.CAMCORDER,
+            "UNPROCESSED" to android.media.MediaRecorder.AudioSource.UNPROCESSED,
+        )
+        for (mode in listOf(android.media.AudioManager.MODE_NORMAL, android.media.AudioManager.MODE_IN_COMMUNICATION)) {
+            am.mode = mode
+            for ((name, source) in sources) {
+                val r = runCatching {
+                    val rec = android.media.AudioRecord(source, 48_000, android.media.AudioFormat.CHANNEL_IN_MONO, android.media.AudioFormat.ENCODING_PCM_16BIT, 48_000)
+                    val buf = ShortArray(960)
+                    var frames = 0
+                    var zero = 0
+                    var sum = 0.0
+                    var n = 0L
+                    rec.startRecording()
+                    repeat(50) {
+                        val got = rec.read(buf, 0, buf.size)
+                        if (got > 0) {
+                            frames++
+                            var e = 0.0
+                            for (i in 0 until got) e += buf[i].toDouble() * buf[i]
+                            if (e == 0.0) zero++
+                            sum += e
+                            n += got
+                        }
+                    }
+                    val dev = rec.routedDevice?.let { "${it.type}:${it.productName}" }
+                    rec.stop()
+                    rec.release()
+                    "frames=$frames zero=$zero rms=${if (n > 0) sqrt(sum / n).toInt() else 0} device=$dev"
+                }
+                Log.i(TAG, "mic mode=$mode $name: ${r.getOrElse { "failed: $it" }}")
+            }
+        }
+        am.mode = android.media.AudioManager.MODE_NORMAL
+        Log.i(TAG, "mic test done")
+    }
+
+    /**
+     * Debug builds only (`--ez com.wristcord.ENGINETEST true`): the real call audio engine on the
+     * connected headset, without Discord. A soft 2 s tone goes through the same decode-and-mix
+     * path as a speaker in a call, and the mic is measured while it plays.
+     */
+    fun engine(ctx: Context) {
+        val headset = Headset.current(ctx) ?: run { Log.i(TAG, "engine: no headset"); return }
+        // The tone is encoded before the engine starts, so only the engine's own codecs run.
+        val packets = ArrayList<ByteArray>()
+        OpusEncoder(channels = 1).use { enc ->
+            var phase = 0.0
+            repeat(100) {
+                val frame = ByteBuffer.allocate(OpusEncoder.FRAME_SAMPLES * 2).order(ByteOrder.LITTLE_ENDIAN)
+                repeat(OpusEncoder.FRAME_SAMPLES) {
+                    frame.putShort((sin(phase) * 3000).toInt().toShort())
+                    phase += 2 * PI * 440 / OpusEncoder.SAMPLE_RATE
+                }
+                packets += enc.encode(frame.array())
+                Thread.sleep(OpusEncoder.FRAME_US / 1000)
+            }
+        }
+        val engine = AudioEngine(ctx, onFrame = {}, onQuiet = {})
+        try {
+            kotlinx.coroutines.runBlocking { engine.start(headset) }
+            Log.i(TAG, "engine: path=${engine.path?.label} headset=${Headset.name(headset)}, ${packets.size} packets")
+            packets.forEachIndexed { seq, p ->
+                engine.onRemote(1234, seq, p)
+                Thread.sleep(OpusEncoder.FRAME_US / 1000)
+            }
+            Thread.sleep(500)
+            val s = engine.stats()
+            Log.i(TAG, "engine: $s")
+            Log.i(TAG, if (s.played > 50 && s.routeOk && s.captured > 50) "engine PASS" else "engine FAIL")
+        } catch (t: Throwable) {
+            Log.e(TAG, "engine FAIL", t)
+        } finally {
+            engine.stop()
+        }
+    }
 }

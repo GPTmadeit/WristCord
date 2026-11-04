@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.media.AudioAttributes
 import android.media.AudioDeviceInfo
+import android.media.AudioFocusRequest
 import android.media.AudioFormat
 import android.media.AudioManager
 import android.media.AudioRecord
@@ -13,13 +14,28 @@ import android.media.MediaRecorder
 import android.os.Handler
 import android.os.Looper
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.sqrt
+
+/** How a call reaches the headset. */
+enum class AudioPath(val label: String) {
+    /** Bluetooth call audio (HFP or LE Audio): the headset's own speakers and mic. */
+    CALL("headset call audio"),
+    /**
+     * Media audio (A2DP) to the headset, and the watch's own mic. Wear OS refuses call audio to
+     * a classic Bluetooth headset while the watch is connected to its phone: the watch is then a
+     * hands-free device for the phone's calls ("rejected SCO since HFPC is connected"), and that
+     * blocks every app, Telecom included.
+     */
+    MEDIA("headset media audio, watch mic"),
+}
 
 /** What the audio side of a call has done, for its diagnostics. */
 data class AudioStats(
@@ -34,7 +50,9 @@ data class AudioStats(
     val played: Long = 0,
     /** Mic level (RMS of 16-bit samples) over the last second. */
     val micLevel: Int = 0,
+    val micSource: String = "",
     val route: String = "",
+    val path: String = "",
     /** False while the call is silenced because Android routed it to the watch itself. */
     val routeOk: Boolean = true,
     val error: String = "",
@@ -67,6 +85,7 @@ class AudioEngine(
     @Volatile private var routeName = "no route yet"
     @Volatile private var error = ""
     @Volatile private var micLevel = 0
+    @Volatile private var micSource = ""
     private val captured = AtomicLong()
     private val silentCapture = AtomicLong()
     private val loudFrames = AtomicLong()
@@ -82,7 +101,9 @@ class AudioEngine(
         decoded = decoded.get(),
         played = played.get(),
         micLevel = micLevel,
+        micSource = micSource,
         route = routeName,
+        path = path?.label.orEmpty(),
         routeOk = routedToHeadset,
         error = error,
     )
@@ -95,6 +116,11 @@ class AudioEngine(
     val talking: StateFlow<Boolean> = _talking
 
     @Volatile private var running = false
+    /** Chosen in [start]: call audio when Android brings it up, media audio otherwise. */
+    @Volatile var path: AudioPath? = null
+        private set
+    private var mediaOutput: AudioDeviceInfo? = null
+    private var focus: AudioFocusRequest? = null
     private var capture: Thread? = null
     private var playback: Thread? = null
     private val streams = ConcurrentHashMap<Int, Stream>()
@@ -109,21 +135,61 @@ class AudioEngine(
         var lastHeard = 0L
     }
 
-    fun start(device: AudioDeviceInfo) {
+    /**
+     * Routes the call to [device]: as call audio if Android brings that up, otherwise as media
+     * audio with the watch's mic. Never to the watch's speaker: with neither, the join fails.
+     */
+    suspend fun start(device: AudioDeviceInfo) {
         if (running) return
-        am.mode = AudioManager.MODE_IN_COMMUNICATION
-        if (!am.setCommunicationDevice(device)) {
-            am.mode = AudioManager.MODE_NORMAL
-            error("Could not route the call to ${Headset.name(device)}")
+        path = if (callRoute(device)) {
+            AudioPath.CALL
+        } else {
+            mediaOutput = Headset.mediaOutput(ctx, device)
+                ?: error("${Headset.name(device)} cannot take call or media audio from the watch")
+            AudioPath.MEDIA
         }
+        Log.i(TAG, "call audio path: ${path!!.label} (${Headset.name(device)})")
+        focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
+            .setAudioAttributes(attributes())
+            .setOnAudioFocusChangeListener { }
+            .build()
+            .also { am.requestAudioFocus(it) }
         running = true
         capture = Thread(::captureLoop, "wristcord-mic").apply { start() }
         playback = Thread(::playbackLoop, "wristcord-speaker").apply { start() }
     }
 
-    /** Re-point the call at another headset. */
+    /**
+     * Android can accept setCommunicationDevice and then fail to bring the link up (it always
+     * does for a classic headset on a watch paired with a phone), so the route only counts once
+     * Android reports it.
+     */
+    private suspend fun callRoute(device: AudioDeviceInfo): Boolean {
+        am.mode = AudioManager.MODE_IN_COMMUNICATION
+        if (am.setCommunicationDevice(device)) {
+            val start = SystemClock.elapsedRealtime()
+            while (SystemClock.elapsedRealtime() - start < CALL_ROUTE_WAIT_MS) {
+                delay(100)
+                val now = am.communicationDevice
+                val elapsed = SystemClock.elapsedRealtime() - start
+                if (now != null && now.type == device.type && elapsed >= CALL_ROUTE_SETTLE_MS) return true
+                if (now != null && Headset.isBuiltIn(now) && elapsed >= CALL_ROUTE_SETTLE_MS) break
+            }
+            Log.i(TAG, "Android did not bring up call audio on ${Headset.name(device)}; using media audio")
+        }
+        runCatching { am.clearCommunicationDevice() }
+        am.mode = AudioManager.MODE_NORMAL
+        return false
+    }
+
+    private fun attributes(): AudioAttributes = AudioAttributes.Builder()
+        .setUsage(if (path == AudioPath.MEDIA) AudioAttributes.USAGE_MEDIA else AudioAttributes.USAGE_VOICE_COMMUNICATION)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
+        .build()
+
+    /** Re-point the call at another headset. Media audio follows Android's active headset. */
     fun route(device: AudioDeviceInfo) {
-        am.setCommunicationDevice(device)
+        if (path == AudioPath.CALL) am.setCommunicationDevice(device)
     }
 
     fun stop() {
@@ -132,6 +198,8 @@ class AudioEngine(
         playback?.join(500)
         streams.values.forEach { runCatching { it.decoder.close() } }
         streams.clear()
+        focus?.let { runCatching { am.abandonAudioFocusRequest(it) } }
+        focus = null
         runCatching { am.clearCommunicationDevice() }
         am.mode = AudioManager.MODE_NORMAL
         _speaking.value = emptySet()
@@ -151,61 +219,109 @@ class AudioEngine(
                 val delta = (sequence - s.lastSeq + 65536) % 65536
                 if (delta == 0 || delta > 32768) return
             }
+            // A short gap: Opus conceals each lost 20 ms so speech does not jump.
+            if (s.lastSeq >= 0) {
+                val missing = (sequence - s.lastSeq + 65535) % 65536
+                if (missing in 1..MAX_CONCEALED) repeat(missing) { s.decoder.conceal()?.let { queue(s, it) } }
+            }
             s.lastSeq = sequence
             val pcm = runCatching { s.decoder.decode(opus) }.getOrNull() ?: return
             decoded.incrementAndGet()
-            val stereo = if (s.decoder.outputChannels == 1) upmix(pcm) else pcm
-            s.queue.addLast(stereo)
-            while (s.queue.size > MAX_QUEUED) s.queue.removeFirst()
+            queue(s, if (s.decoder.outputChannels == 1) upmix(pcm) else pcm)
             s.lastHeard = System.currentTimeMillis()
         }
     }
 
+    /**
+     * Mic sources, best first for the path. A source can come back as pure digital silence:
+     * the Pixel Watch 4 gives VOICE_COMMUNICATION nothing but zeros unless a Bluetooth call
+     * link is up, so a source that stays exactly zero for a second is swapped for the next.
+     */
+    private fun micSources(): List<Int> = when (path) {
+        AudioPath.CALL -> listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)
+        else -> listOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.VOICE_COMMUNICATION)
+    }
+
+    /** Queue decoded audio in 20 ms blocks: the mixer plays exactly one block per tick. */
+    private fun queue(s: Stream, pcm: ShortArray) {
+        var at = 0
+        while (at < pcm.size) {
+            val end = minOf(at + FRAME_SHORTS_STEREO, pcm.size)
+            s.queue.addLast(if (at == 0 && end == pcm.size) pcm else pcm.copyOfRange(at, end))
+            at = end
+        }
+        while (s.queue.size > MAX_QUEUED) s.queue.removeFirst()
+    }
+
     @SuppressLint("MissingPermission") // RECORD_AUDIO is checked before a call is joined.
+    private fun openMic(source: Int): AudioRecord? = runCatching {
+        val min = AudioRecord.getMinBufferSize(OpusEncoder.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
+        AudioRecord(source, OpusEncoder.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, maxOf(min, FRAME_BYTES_MONO * 4))
+            .takeIf { it.state == AudioRecord.STATE_INITIALIZED }
+            ?.also { it.startRecording() }
+    }.getOrNull()
+
     private fun captureLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
-        val min = AudioRecord.getMinBufferSize(OpusEncoder.SAMPLE_RATE, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
-        val record = AudioRecord(
-            MediaRecorder.AudioSource.VOICE_COMMUNICATION,
-            OpusEncoder.SAMPLE_RATE,
-            AudioFormat.CHANNEL_IN_MONO,
-            AudioFormat.ENCODING_PCM_16BIT,
-            maxOf(min, FRAME_BYTES_MONO * 4),
-        )
         val encoder = runCatching { OpusEncoder() }.getOrElse {
-            Log.e(TAG, "no Opus encoder on this watch", it)
-            error = "No Opus encoder on this watch"
-            record.release()
+            Log.e(TAG, "no Opus encoder", it)
+            error = "No Opus encoder"
             return
         }
-        if (record.state != AudioRecord.STATE_INITIALIZED) {
+        val sources = micSources()
+        var sourceIndex = 0
+        var record = openMic(sources[0])
+        if (record == null) {
             Log.e(TAG, "the microphone did not open")
             error = "The microphone did not open"
+            encoder.close()
+            return
         }
+        micSource = sourceName(sources[0])
         val frame = ByteArray(FRAME_BYTES_MONO)
         var hangover = 0
         var peak = 0.0
         var frames = 0
+        var zeros = 0
+        var floor = 0.0
         try {
-            record.startRecording()
             while (running) {
                 var read = 0
                 while (read < frame.size && running) {
-                    val n = record.read(frame, read, frame.size - read)
+                    val n = record!!.read(frame, read, frame.size - read)
                     if (n <= 0) break
                     read += n
                 }
                 if (read < frame.size) continue
                 captured.incrementAndGet()
                 val level = rms(frame)
-                if (level == 0.0) silentCapture.incrementAndGet()
+                if (level == 0.0) {
+                    silentCapture.incrementAndGet()
+                    if (++zeros >= SILENT_SOURCE_FRAMES && sourceIndex < sources.lastIndex) {
+                        val next = openMic(sources[sourceIndex + 1])
+                        if (next != null) {
+                            runCatching { record!!.stop() }
+                            record!!.release()
+                            record = next
+                            sourceIndex++
+                            micSource = sourceName(sources[sourceIndex])
+                            Log.w(TAG, "mic gave only silence; switched to $micSource")
+                        }
+                        zeros = 0
+                    }
+                } else {
+                    zeros = 0
+                }
                 if (level > peak) peak = level
                 if (++frames == 50) {
                     micLevel = peak.toInt()
                     peak = 0.0
                     frames = 0
                 }
-                val loud = level > VAD_THRESHOLD
+                // Voice activity over the room's noise floor: the floor drops at once and rises
+                // slowly, so speech barely lifts it. A wrist mic is far quieter than a headset's.
+                floor = if (floor == 0.0 || level < floor) level else floor + (level - floor) * FLOOR_RISE
+                val loud = level > maxOf(VAD_MIN, floor * VAD_OVER_FLOOR)
                 if (loud) loudFrames.incrementAndGet()
                 if (loud) hangover = HANGOVER_FRAMES else if (hangover > 0) hangover--
                 if (!micEnabled || !routedToHeadset || hangover == 0) {
@@ -224,8 +340,8 @@ class AudioEngine(
         } catch (t: Throwable) {
             Log.e(TAG, "capture failed", t)
         } finally {
-            runCatching { record.stop() }
-            record.release()
+            runCatching { record?.stop() }
+            record?.release()
             encoder.close()
             if (_talking.value) {
                 _talking.value = false
@@ -234,15 +350,17 @@ class AudioEngine(
         }
     }
 
+    private fun sourceName(source: Int) = when (source) {
+        MediaRecorder.AudioSource.VOICE_COMMUNICATION -> "call mic"
+        MediaRecorder.AudioSource.VOICE_RECOGNITION -> "speech mic"
+        MediaRecorder.AudioSource.MIC -> "plain mic"
+        else -> "mic $source"
+    }
+
     private fun playbackLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
         val track = AudioTrack.Builder()
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(AudioAttributes.USAGE_VOICE_COMMUNICATION)
-                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
-                    .build()
-            )
+            .setAudioAttributes(attributes())
             .setAudioFormat(
                 AudioFormat.Builder()
                     .setSampleRate(OpusEncoder.SAMPLE_RATE)
@@ -261,6 +379,7 @@ class AudioEngine(
             Log.i(TAG, "call audio routed to $routeName" + if (routedToHeadset) "" else ": silenced")
         }
         track.addOnRoutingChangedListener(onRoute, Handler(Looper.getMainLooper()))
+        mediaOutput?.let { track.setPreferredDevice(it) }
         val mix = IntArray(FRAME_SHORTS_STEREO)
         val out = ShortArray(FRAME_SHORTS_STEREO)
         var tick = 0
@@ -328,11 +447,21 @@ class AudioEngine(
         const val FRAME_SHORTS_STEREO = OpusEncoder.FRAME_SAMPLES * 2
         const val MAX_QUEUED = 6
         const val START_FRAMES = 2
+        /** How long Android gets to bring up headset call audio, and how long it must hold. */
+        const val CALL_ROUTE_WAIT_MS = 2_500L
+        const val CALL_ROUTE_SETTLE_MS = 600L
         /** 100 ms without a frame before a speaker re-buffers. */
         const val MAX_UNDERRUNS = 5
         const val STREAM_IDLE_MS = 30_000L
-        /** About -45 dBFS: speech on a headset mic, not breathing or a fan. */
-        const val VAD_THRESHOLD = 180.0
+        /** Voice activity: this far over the noise floor, and never below [VAD_MIN]. */
+        const val VAD_OVER_FLOOR = 3.0
+        const val VAD_MIN = 60.0
+        /** Per-frame rise of the noise floor estimate (falls are immediate). */
+        const val FLOOR_RISE = 0.002
+        /** One second of exact digital silence and the next mic source is tried. */
+        const val SILENT_SOURCE_FRAMES = 50
+        /** Gaps up to this many packets are concealed; longer ones are a pause. */
+        const val MAX_CONCEALED = 3
         const val SPEAKING_THRESHOLD = 250.0
         /** Keep sending for 300 ms after the last loud frame so words are not clipped. */
         const val HANGOVER_FRAMES = 15

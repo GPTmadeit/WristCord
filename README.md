@@ -6,10 +6,11 @@ your servers, DMs, unreads and voice channels straight from Discord, in Discord'
 Discord's own apps are. No phone app needed.
 
 > **2.0 is a beta.** QR sign-in, reading and replying, and the voice channel list are confirmed
-> on a real account. Joining a call works. In beta.2 the call was silent both ways, and beta.3
-> fixes the likely cause, but a call with working audio has not been confirmed yet. While a
-> call is on the watch, its voice channel screen shows live diagnostics. If a call is still
-> silent, they say where the audio stops. Please report them.
+> on a real account. Calls on the watch carry audio both ways since beta.4: verified in a real
+> Discord call on a Pixel Watch 4, end-to-end encrypted, with the watch's own logs. beta.2 and
+> beta.3 joined silent calls; [docs/wear-audio.md](docs/wear-audio.md) explains why. While a
+> call is on the watch, its voice channel screen shows live diagnostics, so a problem says where
+> the audio stops. Please report anything odd.
 
 > **Unofficial client.** WristCord is not made by or affiliated with Discord. Discord's Terms
 > of Service do not allow third-party clients, and an account using one can be actioned. WristCord
@@ -75,14 +76,24 @@ greyed out and says why. That rule is enforced in the call code, not just the bu
 
 - If the headset drops mid-call, the watch stops sending your mic and goes silent at once. If
   the headset is not back within **10 seconds**, it leaves the call.
-- If Android ever routes the call anywhere but a Bluetooth device, the watch goes silent and
-  stops sending your mic until the call is back on the headset.
-- If the watch cannot route the call to the headset when you join, the join is cancelled.
+- If Android ever puts the call on the watch's own speaker, the watch goes silent and stops
+  sending your mic until the call is back on the headset.
+- If the headset can take neither call audio nor media audio, the join is cancelled.
+
+**Where the audio goes.** WristCord first asks Android for the headset's *call* audio, which
+uses the headset's speakers and its mic. On a Pixel Watch paired with a phone, Wear OS refuses
+that to every app, Android's own Telecom included: the watch is itself a hands-free device for
+the phone's calls, and that blocks it. When Android doesn't bring call audio up within a couple
+of seconds, the call plays as **media audio** on the headset, full-band 48 kHz. You speak into
+the **watch's mic**, and the voice channel screen says so. LE Audio headsets, or a watch not
+connected to a phone, keep the headset's mic. [docs/wear-audio.md](docs/wear-audio.md) has the
+log lines.
 
 **Joining** works like Discord's own apps. The watch's session asks Discord's gateway to join
 (op 4) and gets a voice server back. It then connects to that server itself: WebSocket
-signalling, UDP media, and Opus audio through Android's own codec. Like Discord's default, it
-uses voice activity: it only sends while you talk. Discord sees the watch as one more of your
+signalling, UDP media, and Opus audio through **libopus**, compiled into the app. (Android's
+own Opus codec crashed on Wear OS 17.) Like Discord's default, it uses voice activity: it only
+sends while you talk, measured against the room's noise floor. Discord sees the watch as one more of your
 devices, so everyone in the channel sees you join, mute and deafen as usual.
 
 **End-to-end encrypted.** Discord has required DAVE, its end-to-end encryption for voice, in
@@ -211,16 +222,20 @@ Two more tests run against Discord's **live** servers without an account:
 - the gateway connects, inflates HELLO, heartbeats, sends IDENTIFY, and gets Discord's `4004` for a
   token that cannot be valid.
 
-On a device or emulator, debug builds have a voice self-test. It loads the DAVE library, builds
-an MLS key package, round-trips XChaCha20, encodes and decodes Opus in real time, and reports the
-headset gate:
+`OpusCodecTest` checks the libopus bridge on the host: one 20 ms frame out per packet at the
+right level, loss concealment, and closed codecs that stay safe.
 
-```bash
-adb shell am start -n com.wristcord/.wear.MainActivity --ez com.wristcord.SELFTEST true
-adb logcat -s WristCord/SelfTest
-```
+On a device or emulator, debug builds have probes, all started with
+`adb shell am start -n com.wristcord/.wear.MainActivity --ez com.wristcord.<NAME> true`:
 
-`adb install --abi arm64-v8a` runs it against the ARM library on an x86_64 emulator.
+| `<NAME>` | What it does | Log tag |
+|---|---|---|
+| `SELFTEST` | Loads the DAVE library and builds an MLS key package. Round-trips XChaCha20 and Opus. Reports the headset gate. | `WristCord/SelfTest` |
+| `ENGINETEST` | Runs the real call engine on the connected headset: picks the audio path, plays a soft 2 s tone, measures the mic. | `WristCord/SelfTest` |
+| `MICTEST` | Measures every mic source in both audio modes. | `WristCord/SelfTest` |
+| `SCOTEST` | Tries Bluetooth call audio three ways (direct, legacy SCO, Telecom), plus media audio. | `WristCord/ScoProbe` |
+
+`adb install --abi arm64-v8a` runs them against the ARM library on an x86_64 emulator.
 
 ### Looking at every screen without an account
 
@@ -292,7 +307,7 @@ adb connect 192.168.1.50:5555
 ```
 
 ```bash
-adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.3.apk
+adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.4.apk
 ```
 
 If `install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a WristCord signed with a different
@@ -318,17 +333,19 @@ discord/                   :discord - the Discord client, plain JVM
   state/                   DiscordState, Snapshot, MessageStore, Permissions
   markdown/                Discord markup -> Block/Inline tree
   voice/                   VoiceConnection (voice gateway v8, UDP, RTP, DAVE flow), VoiceProtocol
-native/dave/               Rust JNI library: DAVE through davey, XChaCha20-Poly1305 transport;
-                           src/testing.rs plays the voice server's MLS side for tests only
+native/dave/               Rust JNI library: DAVE through davey, libopus (src/opus.rs), the
+                           XChaCha20-Poly1305 transport; src/testing.rs plays the voice
+                           server's MLS side for tests only
 wear/  discord/            Account (connection policy), TokenVault, Voice merge, ThemePrefs, Demo
-       voice/              VoiceCall, AudioEngine, OpusCodec, Headset (the headset rule),
-                           CallNetwork, VoiceService, NativeDave, SelfTest, SlotConfig
+       voice/              VoiceCall, AudioEngine (call or media audio path), OpusCodec
+                           (libopus), Headset (the headset rule), CallNetwork, VoiceService,
+                           NativeDave, SelfTest and ScoProbe (debug probes), SlotConfig
        ui/                 Login, Home, DMs, Guild, Chat, message actions, voice channel,
                            remote, outputs, settings
        ui/theme/           DiscordTokens.kt (generated), DiscordTheme
        tile/               tile, complication
        shared/             updater, brand, icon sets, voice model
-docs/                      discord-protocol.md (reverse engineering, voice)
+docs/                      discord-protocol.md (reverse engineering, voice), wear-audio.md
 tools/                     gen_theme.py (theme tables), re/ (bundle indexer and extractors)
 ```
 
@@ -357,8 +374,8 @@ tools/                     gen_theme.py (theme tables), re/ (bundle indexer and 
   reach the watch through Wear OS. A second copy from WristCord would be noise, and receiving
   them would mean keeping a socket open all day.
 - **Forums** are listed but open on your phone; there is no forum view on the watch yet.
-- **32-bit watches.** The ARM libraries are built for both `arm64-v8a` and `armeabi-v7a`. The
-  32-bit one has not been run anywhere yet, because the emulator only translates 64-bit ARM.
+- **32-bit watches.** The ARM libraries are built for `arm64-v8a` and `armeabi-v7a`. The Pixel
+  Watch 4 is a 32-bit watch, so the `armeabi-v7a` one is the one tested on real hardware.
 
 ## Credits
 
@@ -366,4 +383,6 @@ tools/                     gen_theme.py (theme tables), re/ (bundle indexer and 
   `native/dave`, and through it [OpenMLS](https://github.com/openmls/openmls).
 - [discord.js](https://github.com/discordjs/discord.js) (Apache-2.0), whose voice package was the
   reference for the voice connection's DAVE handling.
+- [libopus](https://opus-codec.org) (BSD-3-Clause) by Xiph.Org and contributors, the voice
+  codec, built through [opusic-sys](https://github.com/DoumanAsh/opusic-sys) (BSD-3-Clause).
 - [hermes-dec](https://github.com/P1sec/hermes-dec) for reading Discord's Hermes bundle.

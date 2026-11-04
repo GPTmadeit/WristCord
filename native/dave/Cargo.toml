@@ -18,6 +18,9 @@ jni = "0.21"
 # Voice transport mode aead_xchacha20_poly1305_rtpsize: the one mode every Discord voice server
 # supports. Java has no XChaCha20, so it lives here next to DAVE.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Opus through libopus itself (bundled, built with cmake), not Android's MediaCodec: on Wear OS
+# 17 the platform codec crashes with more than one instance busy and returns frames in bursts.
+opusic-sys = { version = "=0.7.6", default-features = false, features = ["bundled"] }
 # Test-only, behind the `testing` feature: Discord's voice server as an MLS external sender for
 # the JVM tests (src/testing.rs). Pinned to the versions davey already uses; never in the APK.
 openmls = { version = "=0.8.3", optional = true }
