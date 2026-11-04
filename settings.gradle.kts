@@ -16,13 +16,11 @@ dependencyResolutionManagement {
 
 rootProject.name = "WristCord"
 
-// Exactly two app modules -> exactly two APKs. `shared/` is not a module; it is a plain
-// source directory that both apps add via `sourceSets` (see each build.gradle.kts), so the
-// watch <-> phone wire protocol is written once and compiled into both APKs.
+// One app: the watch. Since 2.0 it signs in to Discord and joins calls itself, so the phone
+// app that used to drive Discord's own phone client is gone.
 //
 // `:discord` is a plain JVM library, not an app: the Discord client itself (gateway, REST,
-// QR login, settings proto, state). Keeping it free of Android lets it be unit-tested on the
-// build machine, including against Discord's live endpoints.
-include(":mobile")
+// QR login, voice, settings proto, state). Keeping it free of Android lets it be unit-tested on
+// the build machine, including against Discord's live endpoints.
 include(":wear")
 include(":discord")

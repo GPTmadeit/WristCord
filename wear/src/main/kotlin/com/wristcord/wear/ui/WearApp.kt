@@ -1,5 +1,8 @@
 package com.wristcord.wear.ui
 
+import android.Manifest
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -7,8 +10,6 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material3.AppScaffold
@@ -20,12 +21,12 @@ import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
 import com.wristcord.wear.WristCordApp
 import com.wristcord.wear.discord.Voice
-import com.wristcord.wear.link.ArtworkStore
-import com.wristcord.wear.link.Commands
-import com.wristcord.wear.link.OngoingService
-import com.wristcord.wear.link.SlotConfig
-import com.wristcord.wear.link.StateStore
 import com.wristcord.wear.ui.theme.WristCordTheme
+import com.wristcord.wear.voice.CallState
+import com.wristcord.wear.voice.Headset
+import com.wristcord.wear.voice.JoinBlocker
+import com.wristcord.wear.voice.SlotConfig
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 sealed interface Screen {
@@ -37,11 +38,12 @@ sealed interface Screen {
     data class Chat(val channelId: Long, val replyTo: Long? = null) : Screen { override val key = "chat-$channelId" }
     data class Message(val channelId: Long, val messageId: Long) : Screen { override val key = "msg-$messageId" }
     data object Remote : Screen { override val key = "remote" }
-    data class Participants(val channelId: Long) : Screen { override val key = "people-$channelId" }
+    data class VoiceChannel(val channelId: Long) : Screen { override val key = "voice-$channelId" }
     data object Outputs : Screen { override val key = "outputs" }
     data object Settings : Screen { override val key = "settings" }
     data object Status : Screen { override val key = "status" }
     data object Theme : Screen { override val key = "theme" }
+    data object Icons : Screen { override val key = "icons" }
     data object Buttons : Screen { override val key = "buttons" }
     data class SlotPicker(val slot: Slot) : Screen { override val key = "slot-${slot.id}" }
     data object Updates : Screen { override val key = "updates" }
@@ -62,20 +64,29 @@ fun WearApp(
     val app = WristCordApp.of(ctx)
     val account = app.account
     val client = app.discord
+    val voiceCall = app.voiceCall
     val scope = rememberCoroutineScope()
 
     val signedIn by account.signedIn.collectAsStateWithLifecycle()
     val snapshot by client.state.snapshot.collectAsStateWithLifecycle()
     val gateway by client.gateway.state.collectAsStateWithLifecycle()
     val gatewayVoice by Voice.gateway.collectAsStateWithLifecycle()
-    val phone by StateStore.state.collectAsStateWithLifecycle()
-    val error by StateStore.error.collectAsStateWithLifecycle()
-    val pending by StateStore.pending.collectAsStateWithLifecycle()
+    val call by voiceCall.state.collectAsStateWithLifecycle()
+    val speaking by voiceCall.speaking.collectAsStateWithLifecycle()
+    val headsets by remember { Headset.observe(ctx).map { Headset.available(ctx) } }
+        .collectAsStateWithLifecycle(initialValue = remember { Headset.available(ctx) })
     val assignments by SlotConfig.assignments.collectAsStateWithLifecycle()
-    val artworkBitmap by ArtworkStore.bitmap.collectAsStateWithLifecycle()
-    val artwork: ImageBitmap? = remember(artworkBitmap) { artworkBitmap?.asImageBitmap() }
     val updateStatus by updates.status.collectAsStateWithLifecycle()
-    val voiceState = remember(gatewayVoice, phone, signedIn) { Voice.merge(gatewayVoice, phone, signedIn) }
+    val voiceState = remember(gatewayVoice, call, signedIn, headsets, snapshot.channels) {
+        Voice.merge(
+            gateway = gatewayVoice,
+            call = call,
+            signedIn = signedIn,
+            headsets = headsets,
+            routed = (call as? CallState.Live)?.headset,
+            channelName = { id -> snapshot.channels[id]?.let { snapshot.channelTitle(it) } },
+        )
+    }
 
     val root: Screen = if (signedIn) Screen.Home else Screen.Login
     val stack = remember(root) { mutableStateListOf(root).apply { if (signedIn) addAll(debugStack) } }
@@ -97,17 +108,30 @@ fun WearApp(
         if (destination != Destination.NONE) onDestinationConsumed()
     }
 
+    // "Move here": take the call that is on another device, after the mic permission if needed.
+    val takeOver: () -> Unit = {
+        if (gatewayVoice.inCall && gatewayVoice.channelId != 0L) {
+            voiceCall.join(gatewayVoice.guildId.takeIf { it != 0L }, gatewayVoice.channelId)
+        }
+    }
+    val micPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+        if (granted) takeOver()
+    }
+
     val onRemoteAction: (RemoteAction) -> Unit = { action ->
-        when {
-            action == RemoteAction.NONE -> Unit
-            action.opensList -> push(Screen.Outputs)
-            action == RemoteAction.REFRESH -> {
-                Commands.refresh(ctx)
+        val onWatch = voiceCall.isOnWatch
+        when (action) {
+            RemoteAction.NONE -> Unit
+            RemoteAction.OUTPUT -> push(Screen.Outputs)
+            RemoteAction.MUTE -> if (onWatch) voiceCall.toggleMute()
+            RemoteAction.DEAFEN -> if (onWatch) voiceCall.toggleDeafen()
+            // Off the watch, leaving goes through the gateway: best effort for a call on
+            // another device, since Discord's own apps never do that.
+            RemoteAction.DISCONNECT -> if (onWatch) voiceCall.leave() else client.leaveVoiceViaGateway()
+            RemoteAction.REFRESH -> {
                 account.touch("refresh")
+                client.gateway.retryNow()
             }
-            action == RemoteAction.DISCONNECT && action.path != null ->
-                Commands.fireOrElse(ctx, action.path!!) { client.leaveVoiceViaGateway() }
-            action.path != null -> Commands.fire(ctx, action.path!!)
         }
     }
 
@@ -133,9 +157,7 @@ fun WearApp(
                 is Screen.Guild -> GuildScreen(
                     snapshot, screen.id,
                     onOpenChannel = { push(Screen.Chat(it)) },
-                    onOpenVoiceChannel = { id ->
-                        if (gatewayVoice.inCall && gatewayVoice.channelId == id) push(Screen.Remote) else push(Screen.Participants(id))
-                    },
+                    onOpenVoiceChannel = { push(Screen.VoiceChannel(it)) },
                 )
                 is Screen.Chat -> ChatScreen(
                     snapshot, screen.channelId,
@@ -157,39 +179,56 @@ fun WearApp(
                 )
                 Screen.Remote -> RemoteHost(
                     state = voiceState,
-                    error = error,
-                    pending = pending,
+                    error = null,
+                    pending = null,
                     assignments = assignments,
-                    artwork = artwork,
-                    context = if (signedIn && gatewayVoice.inCall) voiceLine(gatewayVoice.copy(selfMute = false, selfDeaf = false, serverMute = false, serverDeaf = false)) else null,
+                    artwork = null,
+                    // The watch's own call is "on this watch" even before Discord's echo of it arrives.
+                    context = if (signedIn && voiceState.inCall) voiceLine(
+                        gatewayVoice.copy(
+                            device = if (voiceState.onWatch) "watch" else gatewayVoice.device,
+                            selfMute = false, selfDeaf = false, serverMute = false, serverDeaf = false,
+                        )
+                    ).ifBlank { null } else null,
                     onAction = onRemoteAction,
                     onOpenSettings = { push(Screen.Buttons) },
-                    onOpenParticipants = if (signedIn && gatewayVoice.inCall) { { push(Screen.Participants(gatewayVoice.channelId)) } } else null,
+                    onOpenParticipants = (voiceCall.currentChannel() ?: gatewayVoice.channelId.takeIf { gatewayVoice.inCall })?.let { id -> { push(Screen.VoiceChannel(id)) } },
+                    onTakeOver = {
+                        if (voiceCall.blocker(gatewayVoice.channelId) == JoinBlocker.NO_MIC_PERMISSION) micPermission.launch(Manifest.permission.RECORD_AUDIO)
+                        else takeOver()
+                    },
                 )
-                is Screen.Participants -> ParticipantsScreen(snapshot, screen.channelId)
-                Screen.Outputs -> OutputsScreen(voiceState, error, pending, onChoose = { device ->
-                    Commands.chooseOutput(ctx, device)
+                is Screen.VoiceChannel -> VoiceChannelScreen(
+                    snapshot, screen.channelId, call, speaking,
+                    onOpenRemote = {
+                        pop()
+                        push(Screen.Remote)
+                    },
+                )
+                Screen.Outputs -> OutputsScreen(voiceState, onChoose = { device ->
+                    Headset.available(ctx).firstOrNull { it.id == device.id }?.let { voiceCall.route(it) }
                     pop()
                 })
                 Screen.Settings -> SettingsScreen(
                     snapshot = snapshot,
                     signedIn = signedIn,
                     updateSummary = updates.summary(updateStatus),
-                    ongoingEnabled = OngoingService.isEnabled(ctx),
-                    onToggleOngoing = { OngoingService.setEnabled(ctx, it) },
                     onOpenStatus = { push(Screen.Status) },
                     onOpenTheme = { push(Screen.Theme) },
+                    onOpenIcons = { push(Screen.Icons) },
                     onOpenButtons = { push(Screen.Buttons) },
                     onOpenUpdates = {
                         updates.check()
                         push(Screen.Updates)
                     },
                     onSignOut = {
+                        voiceCall.leave()
                         scope.launch { account.signOut(revoke = true) }
                     },
                 )
                 Screen.Status -> StatusScreen(snapshot, onDone = ::pop)
                 Screen.Theme -> ThemeScreen()
+                Screen.Icons -> IconScreen(onDone = ::pop)
                 Screen.Buttons -> ButtonsScreen(
                     assignments = assignments,
                     onEditSlot = { push(Screen.SlotPicker(it)) },

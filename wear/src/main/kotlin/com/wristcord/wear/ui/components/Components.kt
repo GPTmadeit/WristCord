@@ -26,6 +26,8 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.wear.compose.material3.MaterialTheme
+import androidx.wear.compose.material3.RadioButtonColors
+import androidx.wear.compose.material3.RadioButtonDefaults
 import androidx.wear.compose.material3.Text
 import coil3.compose.AsyncImage
 import com.google.zxing.BarcodeFormat
@@ -33,6 +35,13 @@ import com.google.zxing.EncodeHintType
 import com.google.zxing.qrcode.QRCodeWriter
 import com.google.zxing.qrcode.decoder.ErrorCorrectionLevel
 import com.wristcord.wear.ui.theme.discord
+
+/**
+ * The selected row is filled with Discord's brand colour, which is also the theme's `primary`,
+ * so the radio dot is drawn in the row's text colour to stay visible.
+ */
+@Composable
+fun radioColors(): RadioButtonColors = RadioButtonDefaults.radioButtonColors(selectedControlColor = discord.controlPrimaryText)
 
 /** Round avatar with an optional Discord status dot cut into its corner. */
 @Composable

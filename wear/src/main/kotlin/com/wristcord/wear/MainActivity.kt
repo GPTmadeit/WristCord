@@ -8,17 +8,11 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.wristcord.BuildConfig
-import com.wristcord.R
-import com.wristcord.shared.Capabilities
 import com.wristcord.shared.IconVariant
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
-import com.wristcord.shared.Wire
 import com.wristcord.wear.discord.Demo
-import com.wristcord.wear.link.ArtworkStore
-import com.wristcord.wear.link.Commands
-import com.wristcord.wear.link.SlotConfig
-import com.wristcord.wear.link.StateStore
+import com.wristcord.wear.voice.SlotConfig
 import com.wristcord.wear.ui.Destination
 import com.wristcord.wear.ui.Screen
 import com.wristcord.wear.ui.WearApp
@@ -38,23 +32,21 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        StateStore.load(this)
         SlotConfig.load(this)
-        ArtworkStore.load(this)
         IconVariant.ensureApplied(this)
-        Capabilities.ensure(
-            ctx = this,
-            declared = resources.getStringArray(R.array.android_wear_capabilities),
-            expected = Wire.CAPABILITY_WATCH,
-        )
         destination = destinationOf(intent)
+        if (BuildConfig.DEBUG && intent?.getBooleanExtra("com.wristcord.SELFTEST", false) == true) {
+            Thread { com.wristcord.wear.voice.SelfTest.run(this) }.start()
+        }
         if (BuildConfig.DEBUG && intent?.getBooleanExtra(Demo.EXTRA, false) == true) {
             Demo.load(
                 WristCordApp.of(this),
                 theme = intent.getIntExtra("com.wristcord.DEMO_THEME", 4),
                 gradient = intent.getIntExtra("com.wristcord.DEMO_GRADIENT", -1).takeIf { it >= 0 },
             )
-            debugStack = demoStack(intent.getStringExtra("com.wristcord.DEMO_SCREEN"))
+            val screen = intent.getStringExtra("com.wristcord.DEMO_SCREEN")
+            if (screen?.startsWith("incall") == true) WristCordApp.of(this).voiceCall.showDemoCall(1000, 1201)
+            debugStack = demoStack(screen)
         }
         setContent {
             WearApp(
@@ -80,8 +72,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Ask the phone bridge to republish - the watch may have been asleep through a change.
-        Commands.refresh(this)
+        // Coming back after the network dropped: skip the backoff wait.
         WristCordApp.of(this).discord.gateway.retryNow()
     }
 
@@ -97,7 +88,10 @@ class MainActivity : ComponentActivity() {
         "message" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL),
             Screen.Message(Demo.GENERAL, WristCordApp.of(this).discord.state.messages.peek(Demo.GENERAL)?.messages?.lastOrNull()?.id ?: 0))
         "remote" -> listOf(Screen.Remote)
-        "people" -> listOf(Screen.Remote, Screen.Participants(1201))
+        "people", "voice", "incall" -> listOf(Screen.Guild(1000), Screen.VoiceChannel(1201))
+        "incall-remote" -> listOf(Screen.Remote)
+        "outputs" -> listOf(Screen.Remote, Screen.Outputs)
+        "icons" -> listOf(Screen.Settings, Screen.Icons)
         "settings" -> listOf(Screen.Settings)
         "status" -> listOf(Screen.Settings, Screen.Status)
         "theme" -> listOf(Screen.Settings, Screen.Theme)
@@ -112,7 +106,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
-        /** Set by the Tile's Output button so tapping it lands straight on the device list. */
+        /** Set by the Tile's Output button so tapping it lands straight on the headset list. */
         const val EXTRA_OPEN_OUTPUTS = "com.wristcord.OPEN_OUTPUTS"
 
         /** Set by the tile, chip and complication: land on the voice remote. */

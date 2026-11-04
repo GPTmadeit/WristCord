@@ -9,20 +9,24 @@ android {
     compileSdk = libs.versions.compileSdk.get().toInt()
 
     defaultConfig {
-        // MUST be byte-identical to :mobile's applicationId. See the note in mobile/build.gradle.kts.
+        // Unchanged since 1.0, so 2.x installs over every earlier release.
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkWear.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 6
-        versionName = "2.0.0-beta.1"
+        versionCode = 7
+        versionName = "2.0.0-beta.2"
 
         // No Wear OS watch is x86; shipping those slices only inflates the download the
-        // watch has to pull over Wi-Fi when it updates itself.
+        // watch has to pull over Wi-Fi when it updates itself. Debug adds x86_64 for the emulator.
         ndk { abiFilters += listOf("arm64-v8a", "armeabi-v7a") }
     }
 
+    // DAVE (Discord's voice end-to-end encryption) is native: see native/dave and the
+    // buildDaveNative task below.
+    ndkVersion = "27.3.13750724"
+
     signingConfigs {
-        // The SAME key as :mobile.
+        // The key every release since 1.0 was signed with; changing it would break updates.
         create("shared") {
             storeFile = rootProject.file("keystore/wristcord.jks")
             storePassword = "wristcord"
@@ -35,6 +39,7 @@ android {
         getByName("debug") {
             signingConfig = signingConfigs.getByName("shared")
             isMinifyEnabled = false
+            ndk { abiFilters += "x86_64" }
         }
         getByName("release") {
             signingConfig = signingConfigs.getByName("shared")
@@ -42,12 +47,8 @@ android {
             // of ART's full AOT/JIT optimisation and Compose keeps its tooling hooks live.
             // Release strips both, and R8 tree-shakes Compose down to what is actually used.
             isMinifyEnabled = true
-            // Resource shrinking stays OFF, deliberately. res/values/wear.xml declares the
-            // Data Layer capability as a string-array that nothing in this app references -
-            // Google Play services reads it out of the APK by name, from another process. The
-            // shrinker cannot see that, deleted it in v1.1.0, and the two devices silently
-            // stopped finding each other. The dex shrinking above is where the size win came
-            // from anyway; this part is not worth the failure mode.
+            // Resource shrinking stays off: it buys a few hundred KB, and in v1.1.0 it deleted a
+            // resource another process looked up by name. Dex shrinking is where the size is.
             isShrinkResources = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
@@ -57,7 +58,9 @@ android {
     }
 
     sourceSets.getByName("main") {
-        kotlin.directories.add(rootProject.file("shared/kotlin").path)
+        jniLibs.directories.add(layout.buildDirectory.dir("jniLibs-dave").get().asFile.path)
+        // The native library's third-party licences travel inside the APK (tools/third_party.py).
+        assets.directories.add(rootProject.file("native/dave/licenses").path)
     }
 
     buildFeatures {
@@ -115,9 +118,7 @@ dependencies {
     implementation(libs.protolayout.material3)
     implementation(libs.guava)
 
-    implementation(libs.play.services.wearable)
     implementation(libs.coroutines.android)
-    implementation(libs.coroutines.play.services)
 
     implementation(libs.androidx.lifecycle.runtime.compose)
     implementation(libs.compose.material.icons.extended)
@@ -132,3 +133,29 @@ dependencies {
 
     testImplementation(libs.junit)
 }
+
+/**
+ * Builds libwristcord_dave.so (native/dave: a JNI bridge to davey, the Rust implementation of
+ * Discord's DAVE end-to-end encryption) for every ABI with cargo-ndk. Needs a Rust toolchain
+ * with the Android targets: `rustup target add aarch64-linux-android armv7-linux-androideabi
+ * x86_64-linux-android` and `cargo install cargo-ndk`.
+ */
+val ndkDir = androidComponents.sdkComponents.ndkDirectory
+val buildDaveNative = tasks.register<Exec>("buildDaveNative") {
+    val crate = rootProject.file("native/dave")
+    val out = layout.buildDirectory.dir("jniLibs-dave")
+    inputs.dir(crate.resolve("src"))
+    inputs.file(crate.resolve("Cargo.toml"))
+    inputs.file(crate.resolve("Cargo.lock"))
+    outputs.dir(out)
+    workingDir = crate
+    doFirst { environment("ANDROID_NDK_HOME", ndkDir.get().asFile.absolutePath) }
+    commandLine(
+        "cargo", "ndk",
+        "-t", "arm64-v8a", "-t", "armeabi-v7a", "-t", "x86_64",
+        "-P", libs.versions.minSdkWear.get(),
+        "-o", out.get().asFile.absolutePath,
+        "build", "--release", "--locked",
+    )
+}
+tasks.named("preBuild") { dependsOn(buildDaveNative) }

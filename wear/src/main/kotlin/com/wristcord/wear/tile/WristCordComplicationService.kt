@@ -19,19 +19,18 @@ import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
 import com.wristcord.wear.MainActivity
 import com.wristcord.wear.discord.Voice
-import com.wristcord.wear.link.StateStore
 
 /**
  * A watch-face complication: current mute state at a glance, one tap to open the remote.
  *
  * Optional - the user adds it from the watch face editor like any other complication. It reads
- * the same cached state the tile does, so it is correct even in a cold process.
+ * the same state the tile does.
  */
 class WristCordComplicationService : SuspendingComplicationDataSourceService() {
 
     override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
-        // Discord's own mute state when the gateway has reported it recently, else the phone's.
-        val state = Voice.mergedSync(this, StateStore.readSync(this))
+        // The watch's own call, or Discord's report of a call on another device.
+        val state = Voice.mergedSync(this)
         return build(request.complicationType, state)
     }
 
@@ -97,7 +96,7 @@ class WristCordComplicationService : SuspendingComplicationDataSourceService() {
     )
 
     companion object {
-        /** Nudge every placed instance after the phone sends new state. */
+        /** Nudge every placed instance after the call state changes. */
         fun requestUpdate(ctx: Context) {
             runCatching {
                 ComplicationDataSourceUpdateRequester

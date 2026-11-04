@@ -1,0 +1,26 @@
+[package]
+name = "wristcord-dave"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "JNI bridge from WristCord's watch app to davey, a Rust implementation of Discord's DAVE end-to-end encryption"
+license = "MIT"
+
+[lib]
+name = "wristcord_dave"
+crate-type = ["cdylib"]
+
+[dependencies]
+# Pinned exactly: 0.2.0 is the release that reached parity with Discord's libdave on
+# transitions (opcodes 21/22) and welcome/commit validation.
+davey = "=0.2.0"
+jni = "0.21"
+# Voice transport mode aead_xchacha20_poly1305_rtpsize: the one mode every Discord voice server
+# supports. Java has no XChaCha20, so it lives here next to DAVE.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

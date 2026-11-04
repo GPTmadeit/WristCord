@@ -1,12 +1,14 @@
 # WristCord
 
 **A Discord client for the Pixel Watch 4/5.** Sign in with Discord's own QR login, then read
-your servers, DMs, unreads and voice calls straight from Discord, in Discord's own themes.
-The voice remote from v1 is still here; its mute state now comes from Discord itself.
+your servers, DMs, unreads and voice channels straight from Discord, in Discord's own themes.
+**Join voice calls on the watch itself** with a Bluetooth headset, end-to-end encrypted the way
+Discord's own apps are. No phone app needed.
 
-> **2.0 is a beta.** The protocol work is verified against Discord's live servers (details
-> below), but the signed-in screens have only been exercised with a synthetic account. Expect
-> rough edges, and please report them.
+> **2.0 is a beta.** QR sign-in, reading and replying, and the voice channel list are confirmed
+> on a real account. Voice on the watch is new in beta.2: it is tested against a simulated
+> voice server and on the emulator, not yet in a real call. Expect rough edges, and please
+> report them.
 
 > **Unofficial client.** WristCord is not made by or affiliated with Discord. Discord's Terms
 > of Service do not allow third-party clients, and an account using one can be actioned. WristCord
@@ -14,25 +16,24 @@ The voice remote from v1 is still here; its mute state now comes from Discord it
 > what you tap, but the risk is yours to weigh. v1.3 (phone bridge only, no Discord login) is still
 > on the [releases page](../../releases/tag/v1.3.0) if you would rather not take it.
 
-| Module     | minSdk | What it is |
-|------------|--------|------------|
-| `:wear`    | 33     | The watch app: the Discord client, voice remote, tile, complication, watch-face chip |
-| `:mobile`  | 31     | Optional phone app: the *voice bridge* that presses mute/deafen/output on the phone's Discord call |
-| `:discord` | -      | Plain-JVM library: gateway, REST, QR login, settings proto, live state. Unit-tested on the build machine |
+| Module        | What it is |
+|---------------|------------|
+| `:wear`       | The watch app (minSdk 33): the Discord client, voice calls, remote, tile, complication |
+| `:discord`    | Plain-JVM library: gateway, REST, QR login, settings proto, live state, voice connection. Unit-tested on the build machine |
+| `native/dave` | Rust JNI library: Discord's DAVE end-to-end encryption through [davey](https://github.com/Snazzah/davey) |
 
 ## Download
 
-Grab the APKs from the [releases page](../../releases). 2.0 betas are GitHub **pre-releases**, so
-a watch still on v1.3 will not offer them by itself; install the first beta by hand (below, or
-with [WatchPush](https://github.com/GPTmadeit/WatchPush)). Each beta updates itself after that.
+Grab `WristCord-watch-<version>.apk` from the [releases page](../../releases) (check it against
+`SHA256SUMS.txt` if you like). 2.0 betas are GitHub **pre-releases**, so a watch still on v1.3
+will not offer them by itself; install the first beta by hand (below, or with
+[WatchPush](https://github.com/GPTmadeit/WatchPush)). Each beta updates itself after that.
 
-| File | Install on | Needed? |
-|------|-----------|---------|
-| `WristCord-watch-<version>.apk` | the Pixel Watch | yes |
-| `WristCord-phone-<version>.apk` | the Android phone paired to the watch | only for mute/deafen/output on the **phone's** call |
+It is signed with the same key as every earlier release, so it installs over v1.3 or beta.1
+without losing your button layout.
 
-Both are signed with the same key as every v1 release, so they install over v1.3 without
-losing your button layout.
+**There is no phone app any more.** If you installed WristCord on your phone (v1.x or
+2.0.0-beta.1), uninstall it there: nothing uses it.
 
 ## What it does
 
@@ -54,8 +55,9 @@ losing your button layout.
   reading on the phone clears it on the watch.
 - **Status.** Online / Idle / Do Not Disturb / Invisible and custom status, set the way Discord's
   apps set them (through your account settings), so every device follows.
-- **Voice, for real.** Which call you are in, on which device ("on your phone", "on desktop"),
-  who else is there and their mute/deafen state, all from Discord's gateway.
+- **Voice channels.** Who is in each one, with Discord's mute/deafen/camera/live flags and a
+  speaking ring, and which device your own call is on ("on your phone", "on desktop").
+- **Voice calls on the watch**, with a Bluetooth headset. See below.
 - **Your Discord theme.** The watch follows your account's appearance setting: **Dark, Ash,
   Onyx or Light**, plus your **Nitro gradient** if you use one. Change it on the phone and the
   watch follows. Every colour comes from Discord's own design tokens (below). Settings → Theme
@@ -63,77 +65,107 @@ losing your button layout.
 - **Shows up as your watch.** In Discord's Settings → Devices the session is listed under the
   watch's model name, not as a generic phone.
 
-## The voice remote, and why the phone bridge still exists
+## Voice on the watch
 
-The radial remote from v1 is unchanged in shape: big centre button, two satellites, a bottom
-button, double-pinch for the centre, always-on while it is open. What changed is where the
-state comes from: the red mic on your wrist is Discord's own `self_mute`, not a guess read off
-a notification label.
+**A wireless headset or nothing.** The watch joins a call only while a Bluetooth headset is
+connected to it: classic Bluetooth (HFP), LE Audio, or Bluetooth hearing aids. A call never
+plays out of the watch's speaker. Without a headset, a voice channel's **Join** button is
+greyed out and says why. That rule is enforced in the call code, not just the button:
 
-**Pressing** mute on a call that is running on your phone is different, and the reason was
-found in Discord's app rather than assumed. Discord does have a "control another session's
-voice" command (gateway op 29, `REMOTE_COMMAND`), and the Android app uses it to mute, deafen and
-hang up calls running on an **Xbox or PlayStation**. It only ever *sends* those commands. Nothing
-in the app acts on one it receives
-([details](docs/discord-protocol.md#remote-voice-control-what-the-protocol-does-not-allow)). So
-no second device can mute the phone's call through Discord's servers, and taking the call over
-from the watch would move it off the phone.
+- If the headset drops mid-call, the watch stops sending your mic and goes silent at once. If
+  the headset is not back within **10 seconds**, it leaves the call.
+- If Android ever routes the call anywhere but a Bluetooth device, the watch goes silent and
+  stops sending your mic until the call is back on the headset.
+- If the watch cannot route the call to the headset when you join, the join is cancelled.
 
-So the four call buttons still go through the **phone bridge**: the optional phone app fires
-Discord's own notification actions (mute and leave work with the phone locked) or presses its
-in-call buttons through an accessibility service scoped to `com.discord` (deafen and output, with
-the screen on). Setup is unchanged from v1: see [docs/step0-discovery.md](docs/step0-discovery.md).
-Without the phone app, the remote still shows the real state, and **Leave** falls back to asking
-Discord's gateway to drop you from the call (best effort: Discord's own apps never do this for
-another device's call, so it is untested).
+**Joining** works like Discord's own apps. The watch's session asks Discord's gateway to join
+(op 4) and gets a voice server back. It then connects to that server itself: WebSocket
+signalling, UDP media, and Opus audio through Android's own codec. Like Discord's default, it
+uses voice activity: it only sends while you talk. Discord sees the watch as one more of your
+devices, so everyone in the channel sees you join, mute and deafen as usual.
 
-| Action     | State from        | Pressed through |
-|------------|-------------------|-----------------|
-| Mute       | Discord gateway   | phone bridge (notification action, a11y fallback) |
-| Deafen     | Discord gateway   | phone bridge (a11y, or notification if present) |
-| Output     | phone bridge      | phone bridge (a11y) |
-| Leave      | Discord gateway   | phone bridge, else gateway |
+**End-to-end encrypted.** Discord has required DAVE, its end-to-end encryption for voice, in
+voice channels and calls since March 2026 (Stage channels aside). WristCord runs it through
+[davey](https://github.com/Snazzah/davey), an open-source Rust implementation over
+[OpenMLS](https://github.com/openmls/openmls), compiled into the APK. Speech is held back for
+the second or so it takes to join the call's encryption group: nothing you say is sent with
+transport encryption alone. While a call is on the watch, its voice channel screen shows
+**End-to-end encrypted** and the call's **voice privacy code**. That code is the same 30 digits
+Discord shows on every other device in the call, so you can compare them.
 
-If the call is on your desktop, the remote says so instead of pretending its buttons will work.
+**The remote.** The radial remote from v1 is unchanged in shape: big centre button, two
+satellites, a bottom button, double-pinch for the centre, always-on while it is open. With the
+call on the watch, its buttons act on that call directly: mute, deafen, leave, and **Output**
+to pick a headset when more than one is connected. The tile's buttons do the same.
+
+**A call on your phone (or desktop)** shows on the watch with its real mute state. The watch
+cannot press mute on it. That limit is in Discord's protocol itself: Discord's remote-control
+command only lets the phone control a console's call. Nothing in Discord's app acts on one
+from another device
+([details](docs/discord-protocol.md#remote-voice-control-what-the-protocol-does-not-allow)).
+What the protocol does allow is moving the call. With a headset connected, the remote offers
+**Move here**, which moves the call to the watch the way switching devices in Discord does.
+**Leave** on a call elsewhere asks Discord's gateway to drop you. That is best effort: Discord's
+own apps never do it for another device's call.
+
+**Network.** For the length of a call, WristCord asks Android for Wi-Fi or LTE rather than
+relaying real-time audio through the phone's Bluetooth link. If neither comes up within a few
+seconds, it uses whatever the watch has.
+
+Not on the watch: video, screen share and Stage channels. Others' cameras and streams show as
+flags. DM calls can be moved to the watch, but there is no button to start one yet.
 
 ## Battery
 
 The watch holds a connection to Discord only while something needs it: the app on screen, a
-tile you just swiped to, or a voice call in progress (while the watch-face chip is on, which is
-the default, it keeps the connection open for the length of the call so the tile and
-complication stay live). A minute after the last of those
-lets go it disconnects, keeping the session resumable for a quick return. It always reports
-itself to Discord as **AFK**, so your phone keeps getting push notifications while the watch is
-connected.
+tile you just swiped to, or a voice call on the watch. A minute after the last of those lets go,
+it disconnects, keeping the session resumable for a quick return. It always reports itself to
+Discord as **AFK**, so your phone keeps getting push notifications while the watch is connected.
+A call on the watch runs as an ongoing activity (watch-face chip and recents) and keeps the CPU
+awake only for as long as it lasts.
 
 ## Privacy and security
 
 - The token is encrypted with an AES-256-GCM key held in the watch's Android Keystore. The key
   never leaves the keystore and backups are off.
-- WristCord talks to `discord.com`, `gateway.discord.gg`, `remote-auth-gateway.discord.gg` and
-  Discord's CDNs, plus `api.github.com` for updates. Nothing else, no analytics.
-- The phone app still holds no token and never talks to Discord.
+- The microphone is open only during a call on the watch, which needs a connected headset and
+  your permission (asked the first time you join).
+- WristCord talks to `discord.com`, `gateway.discord.gg`, `remote-auth-gateway.discord.gg`,
+  Discord's CDNs and the voice server Discord assigns to a call, plus `api.github.com` for
+  updates. Nothing else, no analytics.
 
 ## Updating
 
-**Watch:** Settings → Updates. **Phone:** the Updates card. Both download the matching APK from
-this repo's releases, check that its signing certificate matches the installed app's, then hand
-it to the system installer. Beta builds follow betas and stable releases; stable builds only
-follow stable releases.
+Settings → **Updates** downloads the APK from this repo's releases, checks that its signing
+certificate matches the installed app's, then hands it to the system installer. Beta builds
+follow betas and stable releases; stable builds only follow stable releases.
 
 ## Build
 
+Prerequisites, besides the Android SDK: JDK 17+, `compileSdk` 37
+(`sdkmanager "platforms;android-37.0"`), NDK 27.3 (`sdkmanager "ndk;27.3.13750724"`), and a
+Rust toolchain with [cargo-ndk](https://github.com/bbqsrc/cargo-ndk):
+
 ```bash
-./gradlew assembleRelease
+rustup target add aarch64-linux-android armv7-linux-androideabi x86_64-linux-android
+cargo install cargo-ndk
 ```
 
-Outputs `wear/build/outputs/apk/release/wear-release.apk` and
-`mobile/build/outputs/apk/release/mobile-release.apk`, both R8-shrunk and signed with the shared
-key in [`keystore/wristcord.jks`](keystore/wristcord.jks). That key is a throwaway development key
-checked in on purpose: its only job is making the two APKs' signatures match so the Data Layer
-will route between them. Don't reuse it for anything you care about.
+```bash
+./gradlew :wear:assembleRelease
+```
 
-Toolchain: AGP 9.1, Gradle 9.3.1, JDK 17+, `compileSdk` 37 (`sdkmanager "platforms;android-37.0"`).
+Gradle builds `native/dave` with cargo-ndk first (`buildDaveNative`, before `preBuild`), then
+outputs `wear/build/outputs/apk/release/wear-release.apk`, R8-shrunk, with the native library for
+`arm64-v8a` and `armeabi-v7a`. Debug builds add `x86_64` for the emulator.
+
+It is signed with the key in [`keystore/wristcord.jks`](keystore/wristcord.jks), which every
+release since 1.0 has been signed with, so each update installs over the last. It was checked in
+when its only job was matching the watch and phone APKs. Because it is public, the updater's
+signature check guards against a corrupted download, not a malicious APK; the download itself
+comes over HTTPS from this repo's releases. Don't reuse the key for anything you care about.
+
+Toolchain: AGP 9.1, Gradle 9.3.1, Kotlin 2.4, Rust stable, davey 0.2.0.
 
 ### Tests
 
@@ -141,9 +173,16 @@ Toolchain: AGP 9.1, Gradle 9.3.1, JDK 17+, `compileSdk` 37 (`sdkmanager "platfor
 ./gradlew :discord:test :wear:testDebugUnitTest
 ```
 
-The `:discord` suite covers zlib-stream framing, the settings and frecency protos, markdown,
-permission resolution, the QR-login crypto, and a READY shaped the way Discord sends it. Two more
-tests run against Discord's **live** servers without an account:
+The `:discord` suite covers:
+- zlib-stream framing, the settings and frecency protos, markdown and permission resolution;
+- the QR-login crypto, and a READY shaped the way Discord sends it;
+- voice: the RTP layout and both transport ciphers, IP discovery and the voice gateway's binary
+  framing;
+- a full voice call against a fake voice server (WebSocket plus UDP). That run goes through the
+  handshake, the DAVE/MLS message flow and encrypted audio both ways, and checks that speech is
+  held back until encryption is ready.
+
+Two more tests run against Discord's **live** servers without an account:
 
 ```bash
 ./gradlew :discord:test --tests '*LiveTest' -Dwristcord.live=true
@@ -155,6 +194,17 @@ tests run against Discord's **live** servers without an account:
 - the gateway connects, inflates HELLO, heartbeats, sends IDENTIFY, and gets Discord's `4004` for a
   token that cannot be valid.
 
+On a device or emulator, debug builds have a voice self-test. It loads the DAVE library, builds
+an MLS key package, round-trips XChaCha20, encodes and decodes Opus in real time, and reports the
+headset gate:
+
+```bash
+adb shell am start -n com.wristcord/.wear.MainActivity --ez com.wristcord.SELFTEST true
+adb logcat -s WristCord/SelfTest
+```
+
+`adb install --abi arm64-v8a` runs it against the ARM library on an x86_64 emulator.
+
 ### Looking at every screen without an account
 
 Debug builds have a synthetic demo account:
@@ -164,20 +214,36 @@ adb shell am start -n com.wristcord/.wear.MainActivity --ez com.wristcord.DEMO t
     --es com.wristcord.DEMO_SCREEN chat --ei com.wristcord.DEMO_THEME 1
 ```
 
-`DEMO_SCREEN` is one of `dms guild chat message remote people settings status theme buttons`.
-`DEMO_THEME` is the proto theme (1 Ash, 2 Light, 3 Dark, 4 Onyx), and `--ei com.wristcord.DEMO_GRADIENT 9`
-adds a Nitro gradient. Release builds contain none of this.
+`DEMO_SCREEN` is one of the following:
+- `dms guild chat message`
+- `remote voice outputs` (a call on the phone)
+- `incall incall-remote` (a pretend call on the watch)
+- `settings status theme icons buttons`
+
+`DEMO_THEME` is the proto theme (1 Ash, 2 Light, 3 Dark, 4 Onyx), and
+`--ei com.wristcord.DEMO_GRADIENT 9` adds a Nitro gradient. Release builds contain none of this.
 
 ## How it was built: reverse engineering Discord's app
 
-Everything WristCord does on the wire was taken from Discord's own Android app (351.11),
-not from guesswork: the gateway URL, IDENTIFY payload and capability flags, the client identity
-and REST headers, the QR-login protocol, the settings protobuf field numbers, the voice
-remote-command limits, and the colour tokens for every theme. The app is React Native compiled
-to Hermes bytecode v98. It was parsed (never run) with
+Most of what WristCord does on the wire was taken from Discord's own Android app (351.11),
+not from guesswork:
+- the gateway URL, IDENTIFY payload and capability flags;
+- the client identity and REST headers;
+- the QR-login protocol and the settings protobuf field numbers;
+- the voice remote-command limits;
+- the colour tokens for every theme.
+
+The app is React Native compiled to Hermes bytecode v98. It was parsed (never run) with
 [hermes-dec](https://github.com/P1sec/hermes-dec) plus a string → function → module indexer.
 Original source file names survive in the bundle, so each finding is cited by Discord's own
 module path.
+
+Voice is the exception. Discord's app does voice in a native media engine outside that bundle,
+so the voice connection follows other sources:
+- Discord's published [voice documentation](https://docs.discord.com/developers/topics/voice-connections);
+- the [DAVE protocol whitepaper](https://daveprotocol.com);
+- two open-source implementations, [davey](https://github.com/Snazzah/davey) and
+  [@discordjs/voice](https://github.com/discordjs/discord.js/tree/main/packages/voice).
 
 **[docs/discord-protocol.md](docs/discord-protocol.md)** has the findings, where each came
 from, and how sure we are of each. [`tools/gen_theme.py`](tools/gen_theme.py) regenerates the
@@ -209,23 +275,20 @@ adb connect 192.168.1.50:5555
 ```
 
 ```bash
-adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.1.apk
+adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.2.apk
 ```
 
 If `install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a WristCord signed with a different
 key is present: `adb -s 192.168.1.50:5555 uninstall com.wristcord` and retry.
 
-The phone APK installs normally (`adb install -r WristCord-phone-v2.0.0-beta.1.apk`, or open the
-file on the phone).
-
 ## First run
 
 1. Open WristCord on the watch and scan the QR with Discord on your phone: **You → ⚙ → Scan QR
    Code**. Confirm on the phone.
-2. Optional, for pressing mute/deafen/output on the phone's call: open WristCord on the phone and
-   grant **Notification access** and the **Accessibility service** from its onboarding screen.
-3. Add the tile: long-press the watch face → **Tiles** → **+** → **WristCord**. The complication
+2. Add the tile: long-press the watch face → **Tiles** → **+** → **WristCord**. The complication
    is in your watch face's own editor as *WristCord mute state*.
+3. For calls: pair a Bluetooth headset with the watch in its Bluetooth settings. Then open a
+   server's voice channel and tap **Join**; the first time, allow the microphone.
 
 ## Layout
 
@@ -237,28 +300,36 @@ discord/                   :discord - the Discord client, plain JVM
   proto/                   ProtoReader/Writer, UserSettings, Frecency
   state/                   DiscordState, Snapshot, MessageStore, Permissions
   markdown/                Discord markup -> Block/Inline tree
+  voice/                   VoiceConnection (voice gateway v8, UDP, RTP, DAVE flow), VoiceProtocol
+native/dave/               Rust JNI library: DAVE through davey, XChaCha20-Poly1305 transport
 wear/  discord/            Account (connection policy), TokenVault, Voice merge, ThemePrefs, Demo
-       ui/                 Login, Home, DMs, Guild, Chat, message actions, remote, settings
+       voice/              VoiceCall, AudioEngine, OpusCodec, Headset (the headset rule),
+                           CallNetwork, VoiceService, NativeDave, SelfTest, SlotConfig
+       ui/                 Login, Home, DMs, Guild, Chat, message actions, voice channel,
+                           remote, outputs, settings
        ui/theme/           DiscordTokens.kt (generated), DiscordTheme
-       link/               phone bridge: PhoneLink, Commands, StateStore, OngoingService
        tile/               tile, complication
-mobile/                    the phone bridge (unchanged in role since v1)
-shared/kotlin/             watch <-> phone wire protocol, updater - compiled into both APKs
-docs/                      discord-protocol.md (reverse engineering), step0-discovery.md (bridge)
-tools/gen_theme.py         regenerates the theme tables
+       shared/             updater, brand, icon sets, voice model
+docs/                      discord-protocol.md (reverse engineering, voice)
+tools/                     gen_theme.py (theme tables), re/ (bundle indexer and extractors)
 ```
 
 ## Acceptance checklist (2.0)
 
-- [ ] QR sign-in completes and the home screen shows your servers in your phone's order.
+- [x] QR sign-in completes on a real account.
+- [ ] The home screen shows your servers in your phone's order.
 - [ ] Opening an unread channel clears its unread on the phone's Discord.
-- [ ] A message sent from the watch appears in Discord on the phone.
+- [x] A message sent from the watch appears in Discord on the phone.
 - [ ] Reacting from the watch shows on the phone; the palette shows your usual emoji.
 - [ ] Changing Discord's theme on the phone changes the watch (Settings → Theme → Match Discord).
 - [ ] Setting Do Not Disturb on the watch changes your status on the phone.
-- [ ] Join a call on the phone: the watch shows the channel and "on your phone", and the mute
-      state flips when you mute on the phone.
-- [ ] With the phone bridge installed, Mute/Leave on the watch act on the phone's call.
+- [x] A voice channel shows who is in it.
+- [ ] With no headset connected, **Join** is greyed out and says to connect one.
+- [ ] With a headset, **Join** connects: the others hear you and you hear them, on the headset.
+      The channel screen shows *End-to-end encrypted* and the same privacy code as the phone.
+- [ ] Mute and deafen on the watch show on the phone's view of the channel.
+- [ ] Switching the headset off mid-call silences the watch at once and leaves after 10 seconds.
+- [ ] With the call on the phone, **Move here** moves it to the watch.
 - [ ] Settings → Sign out removes the watch from Discord's Devices list.
 - [ ] Settings → Updates finds the next beta.
 
@@ -268,5 +339,13 @@ tools/gen_theme.py         regenerates the theme tables
   reach the watch through Wear OS. A second copy from WristCord would be noise, and receiving
   them would mean keeping a socket open all day.
 - **Forums** are listed but open on your phone; there is no forum view on the watch yet.
-- **No voice on the watch itself.** Joining a call from the watch would need Discord's full voice
-  stack (RTP, Opus and its DAVE end-to-end encryption). It is the obvious next step.
+- **32-bit watches.** The ARM libraries are built for both `arm64-v8a` and `armeabi-v7a`. The
+  32-bit one has not been run anywhere yet, because the emulator only translates 64-bit ARM.
+
+## Credits
+
+- [davey](https://github.com/Snazzah/davey) (MIT) by Snazzah, the DAVE implementation inside
+  `native/dave`, and through it [OpenMLS](https://github.com/openmls/openmls).
+- [discord.js](https://github.com/discordjs/discord.js) (Apache-2.0), whose voice package was the
+  reference for the voice connection's DAVE handling.
+- [hermes-dec](https://github.com/P1sec/hermes-dec) for reading Discord's Hermes bundle.

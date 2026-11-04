@@ -1,19 +1,21 @@
-# See the note in mobile/proguard-rules.pro - shrink, do not rename.
+# Shrink, do not rename: crash traces stay readable and nothing resolved by name can break.
 -dontobfuscate
 
 -keep class com.wristcord.wear.MainActivity { *; }
 -keep class com.wristcord.wear.tile.WristCordTileService { *; }
 -keep class com.wristcord.wear.tile.TileActionActivity { *; }
 -keep class com.wristcord.wear.tile.TileActionReceiver { *; }
--keep class com.wristcord.wear.link.WearListenerService { *; }
 -keep class com.wristcord.shared.InstallResultReceiver { *; }
--keep class com.wristcord.wear.link.OngoingService { *; }
+-keep class com.wristcord.wear.voice.VoiceService { *; }
+
+# JNI: libwristcord_dave.so binds to these by name.
+-keepclasseswithmembernames class * { native <methods>; }
+-keep class com.wristcord.wear.voice.NativeDave { *; }
 -keep class com.wristcord.wear.tile.WristCordComplicationService { *; }
 
 # Complication data sources are bound by the watch face across a binder.
 -keep class * extends androidx.wear.watchface.complications.datasource.ComplicationDataSourceService { *; }
 
--keep class * extends com.google.android.gms.wearable.WearableListenerService { *; }
 
 # Tiles/ProtoLayout are resolved by the system renderer across a binder; keep the whole
 # service surface and the protobuf-backed builders they hand over.

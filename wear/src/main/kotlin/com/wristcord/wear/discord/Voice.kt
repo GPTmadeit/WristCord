@@ -1,21 +1,22 @@
 package com.wristcord.wear.discord
 
 import android.content.Context
+import android.media.AudioDeviceInfo
+import com.wristcord.shared.OutputDevice
 import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
+import com.wristcord.wear.WristCordApp
+import com.wristcord.wear.voice.CallState
+import com.wristcord.wear.voice.Headset
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
 /**
- * Two sources of voice state meet here:
+ * What the remote, tile and complication show, from two sources:
  *
- *  - **Discord's gateway** ([VoiceSnapshot]): the real `self_mute`/`self_deaf`, channel and
- *    server, wherever the call is running. Authoritative whenever it is fresh.
- *  - **The phone bridge** ([VoiceState] from the phone app): the audio-output list and whether
- *    the phone can act right now. Also the fallback when the watch is signed out or offline.
- *
- * The result keeps the shape of [VoiceState] so the remote, tile, complication and chip all
- * render one thing.
+ *  - **the watch's own call** ([CallState]) when the watch is in voice - its buttons act on it;
+ *  - **Discord's gateway** ([VoiceSnapshot]) for a call on your phone or desktop - shown as
+ *    it is, with "move it here" on offer while a headset is connected.
  */
 object Voice {
 
@@ -36,25 +37,72 @@ object Voice {
         loaded = true
     }
 
-    fun merge(gateway: VoiceSnapshot, phone: VoiceState, signedIn: Boolean, nowMs: Long = System.currentTimeMillis()): VoiceState {
-        if (!signedIn || !gateway.isFresh(nowMs)) return phone
-        if (!gateway.inCall) return phone.copy(inCall = false, channel = "", muted = Toggle.UNKNOWN, deafened = Toggle.UNKNOWN, blocker = "")
-        val blocker = when (gateway.device) {
-            "phone", "" -> phone.blocker
-            "watch" -> ""
-            else -> "Call is on your ${gateway.device} - the buttons work when it is on your phone"
-        }
-        return phone.copy(
+    fun merge(
+        gateway: VoiceSnapshot,
+        call: CallState,
+        signedIn: Boolean,
+        headsets: List<AudioDeviceInfo>,
+        routed: String?,
+        channelName: (Long) -> String?,
+        nowMs: Long = System.currentTimeMillis(),
+    ): VoiceState = when (call) {
+        is CallState.Live -> VoiceState(
             inCall = true,
-            channel = gateway.channel,
-            muted = if (gateway.muted) Toggle.ON else Toggle.OFF,
-            deafened = if (gateway.deafened) Toggle.ON else Toggle.OFF,
-            blocker = blocker,
-            updatedAt = gateway.updatedAt,
+            channel = channelName(call.channelId) ?: gateway.channel.ifBlank { "Voice" },
+            muted = if (call.muted || call.deafened) Toggle.ON else Toggle.OFF,
+            deafened = if (call.deafened) Toggle.ON else Toggle.OFF,
+            outputs = headsets.map { OutputDevice(it.id, it.type, Headset.name(it), Headset.name(it) == routed) },
+            blocker = when {
+                call.headsetLost -> "Headset disconnected - leaving in a moment"
+                call.reconnecting -> "Reconnecting…"
+                else -> ""
+            },
+            onWatch = true,
+            updatedAt = nowMs,
         )
+        is CallState.Joining -> VoiceState(
+            inCall = true,
+            channel = channelName(call.channelId) ?: "Voice",
+            blocker = call.step + "…",
+            onWatch = true,
+            updatedAt = nowMs,
+        )
+        else -> {
+            val ended = (call as? CallState.Ended)?.reason
+            if (signedIn && gateway.inCall && gateway.isFresh(nowMs) && gateway.device != "watch") {
+                val where = when (gateway.device) {
+                    "phone" -> "your phone"
+                    "desktop" -> "your computer"
+                    "web" -> "a browser"
+                    "console" -> "a console"
+                    else -> "another device"
+                }
+                VoiceState(
+                    inCall = true,
+                    channel = gateway.channel,
+                    muted = if (gateway.muted) Toggle.ON else Toggle.OFF,
+                    deafened = if (gateway.deafened) Toggle.ON else Toggle.OFF,
+                    blocker = ended ?: "On $where",
+                    canMoveHere = headsets.isNotEmpty(),
+                    updatedAt = gateway.updatedAt,
+                )
+            } else {
+                VoiceState(blocker = ended.orEmpty())
+            }
+        }
     }
 
-    /** Cold-process read for the tile and complication. */
-    fun mergedSync(ctx: Context, phone: VoiceState): VoiceState =
-        merge(VoiceSnapshot.read(ctx), phone, TokenVault(ctx).hasToken)
+    /** For the tile and complication, which may run before any screen has. */
+    fun mergedSync(ctx: Context): VoiceState {
+        val app = WristCordApp.of(ctx)
+        val snap = app.discord.state.value
+        return merge(
+            gateway = if (loaded) _gateway.value else VoiceSnapshot.read(ctx),
+            call = app.voiceCall.state.value,
+            signedIn = TokenVault(ctx).hasToken,
+            headsets = runCatching { Headset.available(ctx) }.getOrDefault(emptyList()),
+            routed = (app.voiceCall.state.value as? CallState.Live)?.headset,
+            channelName = { id -> snap.channels[id]?.let { snap.channelTitle(it) } },
+        )
+    }
 }

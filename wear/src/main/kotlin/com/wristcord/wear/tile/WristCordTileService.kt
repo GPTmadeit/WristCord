@@ -34,8 +34,7 @@ import com.wristcord.wear.WristCordApp
 import com.wristcord.wear.discord.ThemePrefs
 import com.wristcord.wear.discord.TokenVault
 import com.wristcord.wear.discord.Voice
-import com.wristcord.wear.link.SlotConfig
-import com.wristcord.wear.link.StateStore
+import com.wristcord.wear.voice.SlotConfig
 import com.wristcord.wear.ui.remoteColors
 import com.wristcord.wear.ui.theme.DiscordColors
 import com.wristcord.wear.ui.theme.tokens
@@ -43,16 +42,16 @@ import com.wristcord.wear.ui.theme.tokens
 /**
  * The tile mirrors the app: the CENTRE slot gets a full-width primary button, the other three
  * sit under it. Same Discord theme, same slot assignments - change the layout in Settings and
- * the tile follows, because both read [SlotConfig]. Mute state is Discord's own, from the
- * gateway, whenever the watch has heard from it recently; looking at the tile asks for a fresh
- * reading.
+ * the tile follows, because both read [SlotConfig]. During a call on the watch the buttons act
+ * on it directly; a call on another device is shown as Discord reports it, and tapping opens
+ * the remote. Looking at the tile asks Discord for a fresh reading.
  */
 class WristCordTileService : Material3TileService() {
 
     override suspend fun MaterialScope.tileResponse(requestParams: TileRequest): Tile {
         val ctx = this@WristCordTileService
-        val state = Voice.mergedSync(ctx, StateStore.readSync(ctx))
-        val error = StateStore.readErrorSync(ctx)
+        val state = Voice.mergedSync(ctx)
+        val error: String? = null
         val slots = SlotConfig.readSync(ctx)
         palette = ThemePrefs.read(ctx).theme.tokens()
         // Someone is looking at the tile: bring Discord's state up to date for the next frame.
@@ -152,9 +151,9 @@ class WristCordTileService : Material3TileService() {
      * to [TileActionActivity], which does the same thing and closes itself.
      */
     private fun MaterialScope.commandClickable(ctx: Context, action: RemoteAction): Clickable {
-        val path = action.path ?: return clickable(id = action.id)
+        if (action == RemoteAction.NONE) return clickable(id = action.id)
         return protoLayoutScope.clickable(
-            pendingIntent = TileActionReceiver.pendingIntent(ctx, path),
+            pendingIntent = TileActionReceiver.pendingIntent(ctx, action.id),
             id = action.id,
             fallbackAction = ActionBuilders.LaunchAction.Builder()
                 .setAndroidActivity(
@@ -162,8 +161,8 @@ class WristCordTileService : Material3TileService() {
                         .setPackageName(ctx.packageName)
                         .setClassName(TileActionActivity::class.java.name)
                         .addKeyToExtraMapping(
-                            TileActionActivity.EXTRA_PATH,
-                            ActionBuilders.AndroidStringExtra.Builder().setValue(path).build(),
+                            TileActionActivity.EXTRA_ACTION,
+                            ActionBuilders.AndroidStringExtra.Builder().setValue(action.id).build(),
                         )
                         .build()
                 )

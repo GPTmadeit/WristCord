@@ -43,6 +43,7 @@ import androidx.wear.compose.material3.onehandedgesture.rememberOneHandedGesture
 import com.wristcord.R
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
+import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
 import kotlinx.coroutines.launch
 import com.wristcord.wear.ui.theme.discord
@@ -62,7 +63,7 @@ import com.wristcord.wear.ui.theme.ThemedBackground
 fun RemoteScreen(
     state: VoiceState,
     error: String?,
-    pending: String?,
+    pending: RemoteAction?,
     assignments: Map<Slot, RemoteAction>,
     ambient: AmbientState,
     artwork: ImageBitmap?,
@@ -148,7 +149,7 @@ fun RemoteScreen(
             action = left,
             diameter = sideDiameter,
             engaged = left.engagedIn(state),
-            busy = pending == left.path,
+            busy = pending == left,
             ambient = ambient,
             enabled = left != RemoteAction.NONE,
             modifier = Modifier
@@ -161,7 +162,7 @@ fun RemoteScreen(
             action = centre,
             diameter = centreDiameter,
             engaged = centre.engagedIn(state),
-            busy = pending == centre.path,
+            busy = pending == centre,
             ambient = ambient,
             enabled = centre != RemoteAction.NONE,
             interactionSource = interactionSource,
@@ -192,7 +193,7 @@ fun RemoteScreen(
             action = right,
             diameter = sideDiameter,
             engaged = right.engagedIn(state),
-            busy = pending == right.path,
+            busy = pending == right,
             ambient = ambient,
             enabled = right != RemoteAction.NONE,
             modifier = Modifier
@@ -235,7 +236,7 @@ fun RemoteScreen(
             action = bottom,
             diameter = bottomDiameter,
             engaged = bottom.engagedIn(state),
-            busy = pending == bottom.path,
+            busy = pending == bottom,
             ambient = ambient,
             enabled = bottom != RemoteAction.NONE,
             modifier = Modifier
@@ -303,28 +304,128 @@ private fun subline(state: VoiceState, error: String?, centre: RemoteAction, con
 fun RemoteHost(
     state: VoiceState,
     error: String?,
-    pending: String?,
+    pending: RemoteAction?,
     assignments: Map<Slot, RemoteAction>,
     artwork: ImageBitmap?,
     context: String?,
     onAction: (RemoteAction) -> Unit,
     onOpenSettings: () -> Unit,
     onOpenParticipants: (() -> Unit)?,
+    onTakeOver: () -> Unit,
 ) {
     val ambient = rememberAmbientState()
     Box(Modifier.fillMaxSize()) {
-        RemoteScreen(
-            state = state,
-            error = error,
-            pending = pending,
-            assignments = assignments,
-            ambient = ambient,
-            artwork = artwork,
-            onAction = onAction,
-            onOpenSettings = onOpenSettings,
-            context = context,
-            onOpenParticipants = onOpenParticipants,
-        )
+        if (state.inCall && !state.onWatch) {
+            RemoteElsewhere(state, ambient, onTakeOver = onTakeOver, onLeave = { onAction(RemoteAction.DISCONNECT) }, onOpenParticipants = onOpenParticipants)
+        } else {
+            RemoteScreen(
+                state = state,
+                error = error,
+                pending = pending,
+                assignments = assignments,
+                ambient = ambient,
+                artwork = artwork,
+                onAction = onAction,
+                onOpenSettings = onOpenSettings,
+                context = context,
+                onOpenParticipants = onOpenParticipants,
+            )
+        }
         if (!ambient.isAmbient) androidx.wear.compose.material3.TimeText()
+    }
+}
+
+/**
+ * A call running on another device: Discord's view of it, and - with a headset connected - one
+ * big button that moves it to the watch. Nothing here pretends to mute a call it cannot reach.
+ */
+@Composable
+private fun RemoteElsewhere(
+    state: VoiceState,
+    ambient: AmbientState,
+    onTakeOver: () -> Unit,
+    onLeave: () -> Unit,
+    onOpenParticipants: (() -> Unit)?,
+) {
+    val c = discord
+    BoxWithConstraints(Modifier.fillMaxSize().background(if (ambient.isAmbient) Color.Black else c.baseLowest)) {
+        val size: Dp = if (maxWidth < maxHeight) maxWidth else maxHeight
+        Text(
+            text = state.channel.ifBlank { "In a call" },
+            style = MaterialTheme.typography.labelMedium,
+            color = if (ambient.isAmbient) c.textMuted else c.headingPrimary,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = size * -0.325f)
+                .fillMaxWidth(0.66f)
+                .then(if (onOpenParticipants != null && !ambient.isAmbient) Modifier.clickable(onClick = onOpenParticipants) else Modifier),
+        )
+        val disc = size * 0.34f
+        Box(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = size * -0.05f)
+                .size(disc)
+                .clip(CircleShape)
+                .background(
+                    when {
+                        ambient.isAmbient -> Color.Black
+                        state.canMoveHere -> c.backgroundBrand
+                        else -> c.surfaceHighest
+                    },
+                    CircleShape,
+                )
+                .clickable(enabled = state.canMoveHere && !ambient.isAmbient, onClick = onTakeOver)
+                .semantics { contentDescription = if (state.canMoveHere) "Move the call to the watch" else "Connect a headset to move the call here" },
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(
+                painter = painterResource(if (state.canMoveHere) R.drawable.ic_headset else R.drawable.ic_headset_off),
+                contentDescription = null,
+                tint = if (state.canMoveHere) c.controlPrimaryText else c.iconMuted,
+                modifier = Modifier.size(disc * 0.42f),
+            )
+        }
+        Column(
+            modifier = Modifier
+                .align(Alignment.Center)
+                .offset(y = size * 0.175f)
+                .fillMaxWidth(0.74f),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                if (state.canMoveHere) "Move here" else "Needs a headset",
+                style = MaterialTheme.typography.labelLarge,
+                color = if (ambient.isAmbient) Color.White else c.headingPrimary,
+                maxLines = 1,
+            )
+            Text(
+                listOfNotNull(
+                    state.blocker.takeIf { it.isNotBlank() },
+                    when {
+                        state.deafened == Toggle.ON -> "deafened"
+                        state.muted == Toggle.ON -> "muted"
+                        else -> null
+                    },
+                ).joinToString(" · "),
+                style = MaterialTheme.typography.labelSmall,
+                color = c.textMuted,
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                textAlign = TextAlign.Center,
+            )
+        }
+        RemoteButton(
+            action = RemoteAction.DISCONNECT,
+            diameter = size * 0.20f,
+            engaged = false,
+            busy = false,
+            ambient = ambient,
+            modifier = Modifier.align(Alignment.Center).offset(y = size * 0.37f),
+            onClick = onLeave,
+        )
     }
 }

@@ -16,6 +16,9 @@ import com.wristcord.wear.discord.DeviceIdentity
 import com.wristcord.wear.discord.ThemePrefs
 import com.wristcord.wear.discord.TokenVault
 import com.wristcord.wear.discord.Voice
+import com.wristcord.wear.voice.Surfaces
+import com.wristcord.wear.voice.VoiceCall
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -29,10 +32,15 @@ class WristCordApp : Application(), SingletonImageLoader.Factory {
 
     val account: Account by lazy { Account(this, discord, TokenVault(this), scope) }
 
+    /** The watch's own voice call (headset required). */
+    val voiceCall: VoiceCall by lazy { VoiceCall(this) }
+
     override fun onCreate() {
         super.onCreate()
         ThemePrefs.load(this)
         Voice.load(this)
+        // The tile and complication follow the watch's own call as it changes.
+        scope.launch { voiceCall.state.collect { Surfaces.refresh(this@WristCordApp) } }
     }
 
     /** Avatars, icons and emoji ride the client's own connection pool. */

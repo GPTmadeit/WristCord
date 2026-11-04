@@ -1,6 +1,7 @@
 # What WristCord 2 learned from the Discord Android app
 
-Everything WristCord 2 does on the wire is lifted from Discord's own Android client, not guessed.
+Everything WristCord 2 does on the wire is lifted from Discord's own Android client, not guessed,
+with one exception: [voice](#voice-on-the-watch), which has its own sources and labels.
 This file records what was found, where in the app it lives, and how sure we are, so the next
 time Discord changes something there is a known place to re-check.
 
@@ -98,9 +99,112 @@ nothing in Discord's Android app acts on a remote command from another session.*
 
 So no second device can mute, deafen or hang up a call running in the phone's Discord app
 through Discord's servers. Sending op 4 from another session would *move* the call to that
-session instead. That is why WristCord 2 reads voice state from the gateway (the real
-`self_mute`/`self_deaf`, channel, and who else is in it) but still presses the buttons through the
-optional phone bridge.
+session instead. 2.0.0-beta.1 therefore still pressed the phone's buttons through a phone app.
+Since beta.2 WristCord does what the protocol does allow and has no phone app. It shows a call
+on another device with its real state from the gateway (`self_mute`/`self_deaf`, channel, who
+else is there). **Move here** sends that op 4 from the watch's own session, which moves the call
+to the watch.
+
+## Voice on the watch
+
+**Not from the app.** Discord Android runs voice in its native media engine, outside the
+Hermes bundle the rest of this file comes from, and that engine was not disassembled. WristCord's
+voice connection (`discord/.../voice/`, `native/dave/`) instead follows these sources:
+- Discord's published [voice connection documentation](https://docs.discord.com/developers/topics/voice-connections);
+- the [DAVE protocol whitepaper](https://daveprotocol.com);
+- two open-source clients: [davey](https://github.com/Snazzah/davey) 0.2.0, which does
+  DAVE/MLS and is linked in directly, and
+  [@discordjs/voice](https://github.com/discordjs/discord.js/tree/main/packages/voice), the
+  reference for message order and edge cases.
+
+Labels in this section:
+- **documented**: published by Discord or the DAVE spec.
+- **reference**: what discord.js or davey do.
+- **tested**: exercised against the fake voice server in `discord/src/test/.../VoiceTest.kt`.
+
+None of it has run against Discord's real voice servers yet.
+
+### Joining
+
+1. Main gateway op 4 `VOICE_STATE_UPDATE {guild_id, channel_id, self_mute, self_deaf}` from the
+   watch's own session (documented). A DM call has `guild_id: null`, and the channel id is then
+   the voice server's id.
+2. Discord replies with `VOICE_STATE_UPDATE` (carrying our `session_id`) and
+   `VOICE_SERVER_UPDATE {token, guild_id, endpoint}`. An `endpoint` of `null` means another update
+   follows (documented). A later `VOICE_SERVER_UPDATE` mid-call moves the call to a new server.
+3. If the account was already in that call on another device, the op 4 moves the call: the other
+   session is disconnected (inferred, from how joining on a second device behaves in Discord).
+4. Leaving is op 4 with `channel_id: null`.
+
+### Voice gateway v8 (documented, tested)
+
+`wss://<endpoint>/?v=8`. JSON messages from the server carry `seq`. Binary messages are
+`[seq u16 BE][op u8][payload]` from the server and `[op u8][payload]` from the client.
+
+| Op | Name | Dir | Payload |
+|---|---|---|---|
+| 0 | Identify | → | `server_id, user_id, session_id, token, max_dave_protocol_version` |
+| 1 | Select Protocol | → | `protocol: "udp", data: {address, port, mode}` |
+| 2 | Ready | ← | `ssrc, ip, port, modes` |
+| 3 | Heartbeat | → | `{t, seq_ack}` (v8 acknowledges the last `seq` received) |
+| 4 | Session Description | ← | `mode, secret_key, dave_protocol_version` |
+| 5 | Speaking | ↔ | `speaking: 1` (microphone), `delay: 0`, `ssrc`; from others it maps `ssrc` → `user_id` |
+| 6 | Heartbeat ACK | ← | |
+| 7 | Resume | → | `server_id, session_id, token, seq_ack` |
+| 8 | Hello | ← | `heartbeat_interval` |
+| 9 | Resumed | ← | |
+| 11 | Clients Connect | ← | `user_ids` |
+| 13 | Client Disconnect | ← | `user_id` |
+| 21-31 | DAVE | ↔ | see below |
+
+Closes: resume only after `4015` or a code below 4000 (reference). `4017` means the call requires
+DAVE (documented): Discord has required it for voice since 2026-03-01.
+
+### UDP and RTP (documented, tested)
+
+- **IP discovery:** 74 bytes, `[type u16 = 1][length u16 = 70][ssrc u32][address, 64 bytes][port u16]`.
+  The reply (type 2) carries the external address and port that go into op 1.
+- **Keepalive:** an 8-byte little-endian counter every 5 s (reference).
+- **Mode:** `aead_aes256_gcm_rtpsize` when offered, else `aead_xchacha20_poly1305_rtpsize`
+  (XChaCha20 from the `chacha20poly1305` crate in `native/dave`).
+- **RTP:** `0x80`, payload type `0x78`, `seq u16`, `timestamp u32` (+960 per 20 ms frame), `ssrc u32`.
+- **Transport encryption:** the additional data is the unencrypted header: the 12 bytes, any CSRCs,
+  and the 4-byte extension preamble when the X bit is set. The extension body is encrypted
+  and is stripped after decryption (reference: discord.js `VoiceReceiver`). The nonce is a 32-bit
+  big-endian counter appended after ciphertext and tag, zero-padded to 12 bytes for AES-GCM and
+  24 for XChaCha20.
+- **Opus:** 48 kHz, 20 ms frames. Discord sends stereo; the watch sends mono at 64 kbps through
+  Android's own codec. Five silence frames `F8 FF FE` end each talk spurt (documented).
+
+### DAVE (documented, reference, tested)
+
+Each call is an MLS ([RFC 9420](https://www.rfc-editor.org/rfc/rfc9420)) group. Discord's voice
+server is its *external sender*, adding and removing members. Every Opus frame is encrypted with
+the sender's key from the group's current epoch before transport encryption wraps it. Protocol
+version 1. davey implements the group and the frame encryption; WristCord routes the messages:
+
+| Op | Name | Dir | What WristCord does |
+|---|---|---|---|
+| 21 | prepare_transition `{transition_id, protocol_version}` | ← | prepare; answer 23 unless `transition_id` is 0 (applies at once) |
+| 22 | execute_transition `{transition_id}` | ← | switch to the prepared protocol version and epoch |
+| 23 | transition_ready `{transition_id}` | → | |
+| 24 | prepare_epoch `{epoch, protocol_version}` | ← | epoch 1 is a new group: reinit and send a new key package |
+| 25 | mls_external_sender (binary) | ← | the voice server's credential |
+| 26 | mls_key_package (binary) | → | sent after op 4 (session description) and after every reinit |
+| 27 | mls_proposals (binary) | ← | members to add or revoke; answered with 28 when they yield a commit |
+| 28 | mls_commit_welcome (binary) | → | commit, plus a welcome for new members |
+| 29 | mls_announce_commit_transition (binary) | ← | `[transition_id u16][commit]`: apply, then 23 |
+| 30 | mls_welcome (binary) | ← | `[transition_id u16][welcome]`: join, then 23 |
+| 31 | mls_invalid_commit_welcome `{transition_id}` | → | when a commit or welcome cannot be applied; then reinit |
+
+- **Silence frames** pass through unencrypted (documented). During a switch to or from protocol
+  version 0, unencrypted frames from others are accepted for a short window (passthrough: 10 s
+  up, 24 s down; reference).
+- **Speech waits for the group.** discord.js sends frames as they are until its DAVE session is
+  ready; WristCord drops speech instead, so none leaves with transport encryption only (tested).
+- **Voice privacy code:** 30 digits derived from the MLS epoch authenticator and shown in groups
+  of five (documented, "displayable codes"). Everyone in the call sees the same code, and it
+  changes when the group does.
 
 ## Settings protobuf
 

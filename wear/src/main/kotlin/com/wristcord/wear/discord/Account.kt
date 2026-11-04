@@ -2,28 +2,22 @@ package com.wristcord.wear.discord
 
 import android.content.Context
 import android.util.Log
-import androidx.wear.tiles.TileService
-import androidx.wear.watchface.complications.datasource.ComplicationDataSourceUpdateRequester
 import com.wristcord.discord.DiscordClient
 import com.wristcord.discord.state.StoreEvent
-import com.wristcord.wear.link.OngoingService
-import com.wristcord.wear.tile.WristCordComplicationService
-import com.wristcord.wear.tile.WristCordTileService
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
-import android.content.ComponentName
 
 /**
  * Owns the signed-in account on the watch: the token, when the gateway is connected, and
- * pushing voice state out to the tile, complication and watch-face chip.
+ * pushing voice state out to the tile and complication.
  *
  * The gateway is connected only while something is holding it - the app on screen, a tile
- * that was just looked at, or a voice call in progress - and dropped a minute after the last
- * holder lets go. A watch that keeps a socket open all day is a watch that dies by dinner.
+ * that was just looked at, or a call on the watch - and dropped a minute after the last holder
+ * lets go. A watch that keeps a socket open all day is a watch that dies by dinner.
  */
 class Account(
     private val ctx: Context,
@@ -113,21 +107,10 @@ class Account(
         val voice = if (_signedIn.value) VoiceSnapshot.from(snap) else VoiceSnapshot()
         val before = Voice.gateway.value
         Voice.publish(ctx, voice)
-        if (voice.copy(updatedAt = 0) != before.copy(updatedAt = 0)) {
-            refreshSurfaces()
-            if (voice.inCall && !before.inCall) OngoingService.onCallStateChanged(ctx, inCall = true)
-            if (!voice.inCall && before.inCall) OngoingService.onCallStateChanged(ctx, inCall = false)
-        }
+        if (voice.copy(updatedAt = 0) != before.copy(updatedAt = 0)) refreshSurfaces()
     }
 
-    fun refreshSurfaces() {
-        runCatching { TileService.getUpdater(ctx).requestUpdate(WristCordTileService::class.java) }
-        runCatching {
-            ComplicationDataSourceUpdateRequester.create(
-                ctx, ComponentName(ctx, WristCordComplicationService::class.java)
-            ).requestUpdateAll()
-        }
-    }
+    fun refreshSurfaces() = com.wristcord.wear.voice.Surfaces.refresh(ctx)
 
     private companion object {
         const val TAG = "WristCord/Account"

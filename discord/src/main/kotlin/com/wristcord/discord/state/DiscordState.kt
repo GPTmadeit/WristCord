@@ -45,6 +45,10 @@ sealed interface StoreEvent {
     data class MessageRead(val channelId: Long) : StoreEvent
     data object VoiceChanged : StoreEvent
     data object SettingsChanged : StoreEvent
+    /** Where to connect for voice; arrives after this session asks to join (op 4). */
+    data class VoiceServer(val token: String, val guildId: Long?, val channelId: Long?, val endpoint: String?) : StoreEvent
+    /** This account's voice state changed, from whichever session holds it. */
+    data class MyVoiceState(val state: VoiceState) : StoreEvent
 }
 
 /**
@@ -190,6 +194,12 @@ class DiscordState {
             "GUILD_ROLE_DELETE" -> onRole(decode(GuildRoleEvent.serializer(), d), delete = true)
             "GUILD_MEMBER_UPDATE" -> onMemberUpdate(decode(GuildMemberUpdate.serializer(), d))
             "VOICE_STATE_UPDATE" -> onVoiceState(decode(VoiceState.serializer(), d))
+            "VOICE_SERVER_UPDATE" -> {
+                val o = d.jsonObject
+                fun str(k: String) = (o[k] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                val token = str("token") ?: return
+                _events.tryEmit(StoreEvent.VoiceServer(token, str("guild_id")?.toLongOrNull(), str("channel_id")?.toLongOrNull(), str("endpoint")))
+            }
             "CALL_CREATE", "CALL_UPDATE" -> onCall(decode(CallEvent.serializer(), d))
             "CALL_DELETE" -> onCallDelete(decode(CallEvent.serializer(), d).channelId)
             "PASSIVE_UPDATE_V2" -> onPassive(decode(PassiveUpdateV2.serializer(), d))
@@ -346,6 +356,7 @@ class DiscordState {
             val users = vs.member?.user?.let { s.users.put(it.id, it) } ?: s.users
             s.copy(voice = voice, users = users)
         }
+        if (vs.userId == value.me?.id) _events.tryEmit(StoreEvent.MyVoiceState(vs))
         _events.tryEmit(StoreEvent.VoiceChanged)
     }
 

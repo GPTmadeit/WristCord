@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Apps
 import androidx.compose.material.icons.rounded.Check
 import androidx.compose.material.icons.rounded.Close
 import androidx.compose.material.icons.rounded.Download
@@ -20,7 +21,6 @@ import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Logout
 import androidx.compose.material.icons.rounded.Palette
-import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -52,6 +52,7 @@ import com.wristcord.R
 import com.wristcord.discord.Cdn
 import com.wristcord.discord.proto.Theme
 import com.wristcord.discord.state.Snapshot
+import com.wristcord.shared.IconVariant
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
 import com.wristcord.wear.WristCordApp
@@ -60,6 +61,7 @@ import com.wristcord.wear.ui.components.Avatar
 import com.wristcord.wear.ui.components.Caption
 import com.wristcord.wear.ui.components.ListScreen
 import com.wristcord.wear.ui.components.RowIconSize
+import com.wristcord.wear.ui.components.radioColors
 import com.wristcord.wear.ui.components.row
 import com.wristcord.wear.ui.components.statusColor
 import com.wristcord.wear.ui.components.statusLabel
@@ -71,16 +73,14 @@ fun SettingsScreen(
     snapshot: Snapshot,
     signedIn: Boolean,
     updateSummary: String,
-    ongoingEnabled: Boolean,
-    onToggleOngoing: (Boolean) -> Unit,
     onOpenStatus: () -> Unit,
     onOpenTheme: () -> Unit,
+    onOpenIcons: () -> Unit,
     onOpenButtons: () -> Unit,
     onOpenUpdates: () -> Unit,
     onSignOut: () -> Unit,
 ) {
     val c = discord
-    var ongoing by remember(ongoingEnabled) { mutableStateOf(ongoingEnabled) }
     var confirmSignOut by remember { mutableStateOf(false) }
     val theme by ThemePrefs.resolved.collectAsStateWithLifecycle()
 
@@ -125,25 +125,22 @@ fun SettingsScreen(
                 secondaryLabel = { Text("Choose what goes where") },
             )
         }
-        row(spec, "chip") {
-            SwitchButton(
-                checked = ongoing,
-                onCheckedChange = {
-                    ongoing = it
-                    onToggleOngoing(it)
-                },
-                modifier = modifier,
-                transformation = transformation,
-                icon = { Icon(Icons.Rounded.Watch, contentDescription = null) },
-                label = { Text("Watch face chip") },
-                secondaryLabel = { Text(if (ongoing) "Shown during calls" else "Off") },
-            )
-        }
-        row(spec, "bridge") {
-            Caption("Mute, deafen and output act on the phone's Discord through WristCord on the phone - Discord's servers do not let one device mute another.", modifier)
+        row(spec, "headset") {
+            Caption("Calls on the watch need a Bluetooth headset connected to it, and never use the watch's own speaker or mic.", modifier)
         }
 
         row(spec, "app") { ListHeader(modifier = modifier) { Text("App") } }
+        row(spec, "icon") {
+            Button(
+                onClick = onOpenIcons,
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(Icons.Rounded.Apps, contentDescription = null, tint = c.iconDefault) },
+                label = { Text("App icon") },
+                secondaryLabel = { Text(IconVariant.current(LocalContext.current).label) },
+            )
+        }
         row(spec, "updates") {
             Button(
                 onClick = onOpenUpdates,
@@ -227,6 +224,7 @@ fun StatusScreen(snapshot: Snapshot, onDone: () -> Unit) {
                 },
                 modifier = modifier,
                 transformation = transformation,
+                colors = radioColors(),
                 icon = { Box(Modifier.size(12.dp).clip(CircleShape).background(statusColor(s))) },
                 label = { Text(statusLabel(s)) },
             )
@@ -271,6 +269,7 @@ fun ThemeScreen() {
                 onSelect = { ThemePrefs.setChoice(ctx, choice) },
                 modifier = modifier,
                 transformation = transformation,
+                colors = radioColors(),
                 label = { Text(choice.label) },
                 secondaryLabel = if (choice == ThemePrefs.Choice.FOLLOW) { { Text("Now ${themeName(accountTheme)}") } } else null,
             )
@@ -400,5 +399,32 @@ fun SlotPickerScreen(slot: Slot, current: RemoteAction, onChoose: (RemoteAction)
                 label = { Text(action.label) },
             )
         }
+    }
+}
+
+
+/** The four launcher looks from 1.x, now picked on the watch itself. */
+@Composable
+fun IconScreen(onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    var current by remember { mutableStateOf(IconVariant.current(ctx)) }
+    ListScreen { spec ->
+        row(spec, "h") { ListHeader(modifier = modifier) { Text("App icon") } }
+        for (v in IconVariant.entries) row(spec, v.id) {
+            RadioButton(
+                selected = current == v,
+                onSelect = {
+                    IconVariant.apply(ctx, v)
+                    current = v
+                    onDone()
+                },
+                modifier = modifier,
+                transformation = transformation,
+                colors = radioColors(),
+                label = { Text(v.label) },
+                secondaryLabel = { Text(v.description, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+        }
+        row(spec, "note") { Caption("The launcher may take a moment to show the new icon.", modifier) }
     }
 }
