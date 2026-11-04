@@ -13,8 +13,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkWear.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 7
-        versionName = "2.0.0-beta.2"
+        versionCode = 8
+        versionName = "2.0.0-beta.3"
 
         // No Wear OS watch is x86; shipping those slices only inflates the download the
         // watch has to pull over Wi-Fi when it updates itself. Debug adds x86_64 for the emulator.
@@ -132,6 +132,7 @@ dependencies {
     implementation(libs.wear.input)
 
     testImplementation(libs.junit)
+    testImplementation(libs.okhttp.mockwebserver)
 }
 
 /**
@@ -159,3 +160,22 @@ val buildDaveNative = tasks.register<Exec>("buildDaveNative") {
     )
 }
 tasks.named("preBuild") { dependsOn(buildDaveNative) }
+
+/**
+ * The same crate built for this machine with its `testing` feature (Discord's voice server as an
+ * MLS external sender), so the JVM tests can run a real DAVE join (DaveCallTest). Never packaged.
+ */
+val daveHost = layout.buildDirectory.dir("dave-host")
+val buildDaveHost = tasks.register<Exec>("buildDaveHost") {
+    val crate = rootProject.file("native/dave")
+    inputs.dir(crate.resolve("src"))
+    inputs.file(crate.resolve("Cargo.toml"))
+    inputs.file(crate.resolve("Cargo.lock"))
+    outputs.dir(daveHost.map { it.dir("release") })
+    workingDir = crate
+    commandLine("cargo", "build", "--release", "--locked", "--features", "testing", "--target-dir", daveHost.get().asFile.absolutePath)
+}
+tasks.withType<Test>().configureEach {
+    dependsOn(buildDaveHost)
+    systemProperty("java.library.path", daveHost.get().dir("release").asFile.absolutePath)
+}

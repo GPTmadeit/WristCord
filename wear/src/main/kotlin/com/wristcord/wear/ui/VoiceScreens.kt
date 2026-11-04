@@ -40,6 +40,7 @@ import com.wristcord.discord.state.Snapshot
 import com.wristcord.shared.OutputDevice
 import com.wristcord.shared.VoiceState
 import com.wristcord.wear.WristCordApp
+import com.wristcord.wear.voice.CallDiagnostics
 import com.wristcord.wear.voice.CallState
 import com.wristcord.wear.voice.Headset
 import com.wristcord.wear.voice.JoinBlocker
@@ -66,6 +67,7 @@ fun VoiceChannelScreen(
     val ctx = LocalContext.current
     val app = WristCordApp.of(ctx)
     val headset by remember { Headset.observe(ctx) }.collectAsStateWithLifecycle(initialValue = remember { Headset.current(ctx) })
+    val diagnostics by app.voiceCall.diagnostics.collectAsStateWithLifecycle()
     val channel = snapshot.channels[channelId]
     val states = snapshot.voiceIn(channelId)
     val here = app.voiceCall.currentChannel() == channelId
@@ -128,6 +130,11 @@ fun VoiceChannelScreen(
         } else if (here && call is CallState.Live) row(spec, "e2ee") {
             Caption(encryptionLine(call), modifier, color = if (call.e2ee || call.securing) c.textMuted else c.textWarning)
         }
+        val d = diagnostics
+        if (here && d != null) row(spec, "diag") {
+            val (text, trouble) = diagnosticsText(d)
+            Caption(text, modifier, color = if (trouble) c.textWarning else c.textMuted)
+        }
         if (states.isEmpty()) row(spec, "empty") { Caption("Nobody is here yet", modifier) }
         for (vs in states) row(spec, vs.userId) {
             val user = snapshot.users[vs.userId] ?: vs.member?.user
@@ -189,6 +196,33 @@ private fun encryptionLine(call: CallState.Live): String = when {
     call.e2ee -> "End-to-end encrypted"
     call.securing -> "Securing the call…"
     else -> "Not end-to-end encrypted"
+}
+
+/**
+ * The call's plumbing in a few lines (beta builds show it so a silent call says where audio
+ * stops). Returns the text and whether something looks wrong.
+ */
+private fun diagnosticsText(d: CallDiagnostics): Pair<String, Boolean> {
+    val l = d.link
+    val a = d.audio
+    val problems = buildList {
+        if (a.error.isNotEmpty()) add(a.error)
+        if (!a.routeOk) add("Silenced: Android put the call on the watch itself")
+        if (l.welcomesRejected > 0) add("E2EE join refused ×${l.welcomesRejected}: ${l.lastDaveError.take(80)}")
+        if (l.protocolVersion > 0 && !l.daveReady && l.heldBack > 0) add("Waiting for E2EE: ${l.heldBack} frames held back")
+        if (l.encryptFailed > 0) add("E2EE could not encrypt ${l.encryptFailed}")
+        if (l.transportFailed > 0) add("${l.transportFailed} packets did not decrypt")
+        if (l.daveFailed > 0) add("${l.daveFailed} frames failed E2EE")
+        if (l.unknownSender > 0) add("${l.unknownSender} frames from an unknown sender")
+        if (a.captured > 100 && a.silentCapture * 2 > a.captured) add("The mic is giving silence")
+        else if (a.captured > 250 && a.loud == 0L) add("Your voice is not reaching the mic (level ${a.micLevel})")
+    }
+    val lines = listOf(
+        "Sent ${l.sent} · received ${l.received} · heard ${l.delivered}",
+        "Mic ${a.micLevel} · played ${a.played} · ${a.route}",
+        d.network,
+    ) + problems
+    return lines.joinToString("\n") to problems.isNotEmpty()
 }
 
 /** Which headset the watch's call plays on, when more than one is connected. */

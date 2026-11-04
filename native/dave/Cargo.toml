@@ -18,6 +18,14 @@ jni = "0.21"
 # Voice transport mode aead_xchacha20_poly1305_rtpsize: the one mode every Discord voice server
 # supports. Java has no XChaCha20, so it lives here next to DAVE.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+# Test-only, behind the `testing` feature: Discord's voice server as an MLS external sender for
+# the JVM tests (src/testing.rs). Pinned to the versions davey already uses; never in the APK.
+openmls = { version = "=0.8.3", optional = true }
+openmls_basic_credential = { version = "=0.5.0", optional = true }
+openmls_rust_crypto = { version = "=0.5.1", optional = true }
+
+[features]
+testing = ["dep:openmls", "dep:openmls_basic_credential", "dep:openmls_rust_crypto"]
 
 [profile.release]
 opt-level = "s"

@@ -18,7 +18,27 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import java.util.ArrayDeque
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.sqrt
+
+/** What the audio side of a call has done, for its diagnostics. */
+data class AudioStats(
+    val captured: Long = 0,
+    /** Captured frames that were exact digital silence: the system is withholding the mic. */
+    val silentCapture: Long = 0,
+    /** Frames loud enough to send (voice activity). */
+    val loud: Long = 0,
+    val encoded: Long = 0,
+    val decoded: Long = 0,
+    /** 20 ms blocks that played someone's voice. */
+    val played: Long = 0,
+    /** Mic level (RMS of 16-bit samples) over the last second. */
+    val micLevel: Int = 0,
+    val route: String = "",
+    /** False while the call is silenced because Android routed it to the watch itself. */
+    val routeOk: Boolean = true,
+    val error: String = "",
+)
 
 /**
  * The watch end of a call: capture from the headset mic, Opus-encode, hand frames to the
@@ -38,11 +58,34 @@ class AudioEngine(
     @Volatile var playbackEnabled = true
 
     /**
-     * The guard behind the headset rule: false whenever Android has the call anywhere but a
-     * Bluetooth device (the headset dropped, or something took the route), and then nothing
-     * plays and nothing is sent until the call is back on the headset.
+     * The guard behind the headset rule: false whenever Android has put the call on the watch's
+     * own speaker or earpiece (the headset dropped, or something took the route), and then
+     * nothing plays and nothing is sent until it is back on the headset. An unknown route does
+     * not count: reports vary by device, and silencing a working call on a guess is worse.
      */
     @Volatile private var routedToHeadset = true
+    @Volatile private var routeName = "no route yet"
+    @Volatile private var error = ""
+    @Volatile private var micLevel = 0
+    private val captured = AtomicLong()
+    private val silentCapture = AtomicLong()
+    private val loudFrames = AtomicLong()
+    private val encoded = AtomicLong()
+    private val decoded = AtomicLong()
+    private val played = AtomicLong()
+
+    fun stats() = AudioStats(
+        captured = captured.get(),
+        silentCapture = silentCapture.get(),
+        loud = loudFrames.get(),
+        encoded = encoded.get(),
+        decoded = decoded.get(),
+        played = played.get(),
+        micLevel = micLevel,
+        route = routeName,
+        routeOk = routedToHeadset,
+        error = error,
+    )
 
     private val _speaking = MutableStateFlow<Set<Int>>(emptySet())
     /** SSRCs heard in the last few hundred ms - drives the speaking rings in the UI. */
@@ -62,6 +105,7 @@ class AudioEngine(
         val queue = ArrayDeque<ShortArray>()
         var lastSeq = -1
         var started = false
+        var underruns = 0
         var lastHeard = 0L
     }
 
@@ -96,7 +140,11 @@ class AudioEngine(
     /** From the network thread: one decrypted Opus frame from [ssrc]. */
     fun onRemote(ssrc: Int, sequence: Int, opus: ByteArray) {
         if (!running) return
-        val s = streams.getOrPut(ssrc) { Stream() }
+        val s = streams[ssrc] ?: runCatching { Stream() }.getOrElse {
+            if (error.isEmpty()) Log.e(TAG, "no Opus decoder on this watch", it)
+            error = "No Opus decoder on this watch"
+            return
+        }.also { streams[ssrc] = it }
         synchronized(s) {
             // Drop late duplicates; a gap of more than half the sequence space means wrap-around.
             if (s.lastSeq >= 0) {
@@ -105,6 +153,7 @@ class AudioEngine(
             }
             s.lastSeq = sequence
             val pcm = runCatching { s.decoder.decode(opus) }.getOrNull() ?: return
+            decoded.incrementAndGet()
             val stereo = if (s.decoder.outputChannels == 1) upmix(pcm) else pcm
             s.queue.addLast(stereo)
             while (s.queue.size > MAX_QUEUED) s.queue.removeFirst()
@@ -125,11 +174,18 @@ class AudioEngine(
         )
         val encoder = runCatching { OpusEncoder() }.getOrElse {
             Log.e(TAG, "no Opus encoder on this watch", it)
+            error = "No Opus encoder on this watch"
             record.release()
             return
         }
+        if (record.state != AudioRecord.STATE_INITIALIZED) {
+            Log.e(TAG, "the microphone did not open")
+            error = "The microphone did not open"
+        }
         val frame = ByteArray(FRAME_BYTES_MONO)
         var hangover = 0
+        var peak = 0.0
+        var frames = 0
         try {
             record.startRecording()
             while (running) {
@@ -140,7 +196,17 @@ class AudioEngine(
                     read += n
                 }
                 if (read < frame.size) continue
-                val loud = rms(frame) > VAD_THRESHOLD
+                captured.incrementAndGet()
+                val level = rms(frame)
+                if (level == 0.0) silentCapture.incrementAndGet()
+                if (level > peak) peak = level
+                if (++frames == 50) {
+                    micLevel = peak.toInt()
+                    peak = 0.0
+                    frames = 0
+                }
+                val loud = level > VAD_THRESHOLD
+                if (loud) loudFrames.incrementAndGet()
                 if (loud) hangover = HANGOVER_FRAMES else if (hangover > 0) hangover--
                 if (!micEnabled || !routedToHeadset || hangover == 0) {
                     if (_talking.value) {
@@ -150,7 +216,10 @@ class AudioEngine(
                     continue
                 }
                 _talking.value = true
-                for (packet in encoder.encode(frame)) onFrame(packet)
+                for (packet in encoder.encode(frame)) {
+                    encoded.incrementAndGet()
+                    onFrame(packet)
+                }
             }
         } catch (t: Throwable) {
             Log.e(TAG, "capture failed", t)
@@ -187,8 +256,9 @@ class AudioEngine(
             .build()
         val onRoute = AudioRouting.OnRoutingChangedListener { r ->
             val d = r.routedDevice
-            routedToHeadset = d != null && Headset.isWirelessRoute(d)
-            if (!routedToHeadset) Log.w(TAG, "call routed to device type ${d?.type}: silenced")
+            routeName = Headset.describe(d)
+            routedToHeadset = d == null || !Headset.isBuiltIn(d)
+            Log.i(TAG, "call audio routed to $routeName" + if (routedToHeadset) "" else ": silenced")
         }
         track.addOnRoutingChangedListener(onRoute, Handler(Looper.getMainLooper()))
         val mix = IntArray(FRAME_SHORTS_STEREO)
@@ -206,14 +276,21 @@ class AudioEngine(
                         continue
                     }
                     val pcm = synchronized(s) {
-                        // A small cushion before a speaker starts, so jitter does not crackle.
+                        // A small cushion before a speaker starts, so jitter does not crackle;
+                        // a brief gap plays silence instead of re-buffering at once.
                         if (!s.started && s.queue.size >= START_FRAMES) s.started = true
-                        if (s.started) s.queue.pollFirst().also { if (s.queue.isEmpty()) s.started = false } else null
+                        if (!s.started) return@synchronized null
+                        s.queue.pollFirst().also {
+                            if (it != null) s.underruns = 0
+                            else if (++s.underruns >= MAX_UNDERRUNS) s.started = false
+                        }
                     } ?: continue
                     if (rmsShorts(pcm) > SPEAKING_THRESHOLD) heard += ssrc
                     for (i in 0 until minOf(pcm.size, mix.size)) mix[i] += pcm[i].toInt()
                 }
-                for (i in out.indices) out[i] = if (playbackEnabled && routedToHeadset) mix[i].coerceIn(-32768, 32767).toShort() else 0
+                val audible = playbackEnabled && routedToHeadset
+                for (i in out.indices) out[i] = if (audible) mix[i].coerceIn(-32768, 32767).toShort() else 0
+                if (audible && heard.isNotEmpty()) played.incrementAndGet()
                 track.write(out, 0, out.size) // blocks: this is what paces the loop at real time
                 if (++tick % 5 == 0 || heard != _speaking.value) _speaking.value = heard
             }
@@ -251,6 +328,8 @@ class AudioEngine(
         const val FRAME_SHORTS_STEREO = OpusEncoder.FRAME_SAMPLES * 2
         const val MAX_QUEUED = 6
         const val START_FRAMES = 2
+        /** 100 ms without a frame before a speaker re-buffers. */
+        const val MAX_UNDERRUNS = 5
         const val STREAM_IDLE_MS = 30_000L
         /** About -45 dBFS: speech on a headset mic, not breathing or a fan. */
         const val VAD_THRESHOLD = 180.0

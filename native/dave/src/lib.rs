@@ -13,6 +13,9 @@ use jni::objects::{JByteArray, JClass, JLongArray};
 use jni::sys::{jboolean, jbyteArray, jint, jlong, jstring, JNI_FALSE, JNI_TRUE};
 use jni::JNIEnv;
 
+#[cfg(feature = "testing")]
+mod testing;
+
 struct Inner {
     session: DaveSession,
     last_error: String,

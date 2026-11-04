@@ -29,14 +29,26 @@ object Headset {
 
     fun isWireless(d: AudioDeviceInfo) = d.type in WIRELESS
 
-    /** Where Android actually sent the call's audio: anything Bluetooth, never the watch itself. */
-    private val WIRELESS_ROUTES = WIRELESS + setOf(
-        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP,
-        AudioDeviceInfo.TYPE_BLE_SPEAKER,
-        AudioDeviceInfo.TYPE_BLE_BROADCAST,
+    /** The watch's own speaker and mic: where a call must never end up. */
+    private val BUILT_IN = setOf(
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER,
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE,
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE,
     )
 
-    fun isWirelessRoute(d: AudioDeviceInfo) = d.type in WIRELESS_ROUTES
+    fun isBuiltIn(d: AudioDeviceInfo) = d.type in BUILT_IN
+
+    /** A short name for where audio is routed, for the call's diagnostics. */
+    fun describe(d: AudioDeviceInfo?): String = when (d?.type) {
+        null -> "no route yet"
+        AudioDeviceInfo.TYPE_BLUETOOTH_SCO -> "Bluetooth call audio"
+        AudioDeviceInfo.TYPE_BLE_HEADSET -> "LE Audio"
+        AudioDeviceInfo.TYPE_HEARING_AID -> "hearing aid"
+        AudioDeviceInfo.TYPE_BLUETOOTH_A2DP -> "Bluetooth media audio"
+        AudioDeviceInfo.TYPE_BUILTIN_SPEAKER, AudioDeviceInfo.TYPE_BUILTIN_SPEAKER_SAFE -> "watch speaker"
+        AudioDeviceInfo.TYPE_BUILTIN_EARPIECE -> "watch earpiece"
+        else -> "device type ${d.type}"
+    }
 
     /** Every wireless headset the call could be routed to right now. */
     fun available(ctx: Context): List<AudioDeviceInfo> =

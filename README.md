@@ -6,9 +6,10 @@ your servers, DMs, unreads and voice channels straight from Discord, in Discord'
 Discord's own apps are. No phone app needed.
 
 > **2.0 is a beta.** QR sign-in, reading and replying, and the voice channel list are confirmed
-> on a real account. Voice on the watch is new in beta.2: it is tested against a simulated
-> voice server and on the emulator, not yet in a real call. Expect rough edges, and please
-> report them.
+> on a real account. Joining a call works. In beta.2 the call was silent both ways, and beta.3
+> fixes the likely cause, but a call with working audio has not been confirmed yet. While a
+> call is on the watch, its voice channel screen shows live diagnostics. If a call is still
+> silent, they say where the audio stops. Please report them.
 
 > **Unofficial client.** WristCord is not made by or affiliated with Discord. Discord's Terms
 > of Service do not allow third-party clients, and an account using one can be actioned. WristCord
@@ -92,6 +93,15 @@ the second or so it takes to join the call's encryption group: nothing you say i
 transport encryption alone. While a call is on the watch, its voice channel screen shows
 **End-to-end encrypted** and the call's **voice privacy code**. That code is the same 30 digits
 Discord shows on every other device in the call, so you can compare them.
+
+**Call diagnostics (beta).** Under the encryption line, the voice channel screen shows:
+- packets sent, received and actually heard;
+- your mic level, and where Android routes the audio;
+- which network the call uses;
+- a plain-language line for any step that is failing, for example "Waiting for E2EE",
+  "frames failed E2EE" or "the mic is giving silence".
+
+The same counters go to the log every five seconds (`adb logcat -s WristCord/Call`).
 
 **The remote.** The radial remote from v1 is unchanged in shape: big centre button, two
 satellites, a bottom button, double-pinch for the centre, always-on while it is open. With the
@@ -181,6 +191,13 @@ The `:discord` suite covers:
 - a full voice call against a fake voice server (WebSocket plus UDP). That run goes through the
   handshake, the DAVE/MLS message flow and encrypted audio both ways, and checks that speech is
   held back until encryption is ready.
+
+`:wear`'s `DaveCallTest` runs a **real** DAVE join with davey on both ends. It uses a host build of
+`native/dave` with its `testing` feature, which plays Discord's voice server as the MLS external
+sender. The watch's `VoiceConnection` joins a call someone is already in, and audio must decrypt
+both ways. It also covers a welcome that arrives before the voice server has listed anyone, and
+working out who is talking from their key alone. Gradle builds that host library
+(`buildDaveHost`) before the unit tests; it is never packaged.
 
 Two more tests run against Discord's **live** servers without an account:
 
@@ -275,7 +292,7 @@ adb connect 192.168.1.50:5555
 ```
 
 ```bash
-adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.2.apk
+adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.3.apk
 ```
 
 If `install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a WristCord signed with a different
@@ -301,7 +318,8 @@ discord/                   :discord - the Discord client, plain JVM
   state/                   DiscordState, Snapshot, MessageStore, Permissions
   markdown/                Discord markup -> Block/Inline tree
   voice/                   VoiceConnection (voice gateway v8, UDP, RTP, DAVE flow), VoiceProtocol
-native/dave/               Rust JNI library: DAVE through davey, XChaCha20-Poly1305 transport
+native/dave/               Rust JNI library: DAVE through davey, XChaCha20-Poly1305 transport;
+                           src/testing.rs plays the voice server's MLS side for tests only
 wear/  discord/            Account (connection policy), TokenVault, Voice merge, ThemePrefs, Demo
        voice/              VoiceCall, AudioEngine, OpusCodec, Headset (the headset rule),
                            CallNetwork, VoiceService, NativeDave, SelfTest, SlotConfig

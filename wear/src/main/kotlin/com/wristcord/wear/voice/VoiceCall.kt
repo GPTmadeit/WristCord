@@ -12,6 +12,7 @@ import com.wristcord.discord.state.StoreEvent
 import com.wristcord.discord.voice.VoiceConnection
 import com.wristcord.discord.voice.VoiceLinkState
 import com.wristcord.discord.voice.VoiceServerInfo
+import com.wristcord.discord.voice.VoiceStats
 import com.wristcord.wear.WristCordApp
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -51,6 +52,9 @@ sealed interface CallState {
     data class Ended(val reason: String) : CallState
 }
 
+/** Live counters for the watch's call: where audio stops, if it does. */
+data class CallDiagnostics(val link: VoiceStats, val audio: AudioStats, val network: String)
+
 /** Why the watch will not join right now, or null when it will. */
 enum class JoinBlocker(val message: String) {
     NO_HEADSET("Connect a Bluetooth headset to the watch to join"),
@@ -71,6 +75,10 @@ class VoiceCall(private val app: WristCordApp) {
 
     private val _state = MutableStateFlow<CallState>(CallState.Idle)
     val state: StateFlow<CallState> = _state
+
+    private val _diagnostics = MutableStateFlow<CallDiagnostics?>(null)
+    /** Updated every second while a call is on the watch. */
+    val diagnostics: StateFlow<CallDiagnostics?> = _diagnostics
 
     private val _speaking = MutableStateFlow<Set<Long>>(emptySet())
     /** User ids heard in the last moment, including you while you talk. */
@@ -186,6 +194,8 @@ class VoiceCall(private val app: WristCordApp) {
             maxDaveVersion = NativeDave.maxProtocolVersion,
             xchachaFactory = NativeDave::xchacha,
             bindSocket = { s -> bound?.bindSocket(s) },
+            // Who the main gateway shows in the channel: the members an MLS welcome may name.
+            recognizedUsers = { app.discord.state.value.voiceIn(info.channelId).map { it.userId } },
             listener = object : VoiceConnection.Listener {
                 override fun onOpus(userId: Long?, ssrc: Int, sequence: Int, opus: ByteArray) {
                     userId?.let { ssrcUsers[ssrc] = it }
@@ -268,6 +278,18 @@ class VoiceCall(private val app: WristCordApp) {
                 }
             }
         }
+        // Diagnostics: on screen every second, in the log every five.
+        val networkName = if (bound != null) "Wi-Fi/LTE" else "default network"
+        cs.launch {
+            var tick = 0
+            while (true) {
+                val link = connection?.stats() ?: VoiceStats()
+                val audio = engine?.stats() ?: AudioStats()
+                _diagnostics.value = CallDiagnostics(link, audio, networkName)
+                if (tick++ % 5 == 0) Log.i(TAG, "stats: $link | $audio | $networkName")
+                delay(1_000)
+            }
+        }
         cs.launch {
             val audio = engine ?: return@launch
             kotlinx.coroutines.flow.combine(audio.speaking, audio.talking) { ssrcs, me -> ssrcs to me }.collect { (ssrcs, me) ->
@@ -312,6 +334,11 @@ class VoiceCall(private val app: WristCordApp) {
             e2ee = true,
             privacyCode = "142857285714428571571428714285",
             headset = "Pixel Buds Pro 2",
+        )
+        _diagnostics.value = CallDiagnostics(
+            VoiceStats(sent = 1520, received = 1874, delivered = 1702, protocolVersion = 1, daveReady = true),
+            AudioStats(captured = 3010, loud = 1530, encoded = 1520, decoded = 1702, played = 1650, micLevel = 2140, route = "Bluetooth call audio"),
+            "Wi-Fi/LTE",
         )
     }
 
@@ -392,6 +419,7 @@ class VoiceCall(private val app: WristCordApp) {
         network = null
         ssrcUsers.clear()
         _speaking.value = emptySet()
+        _diagnostics.value = null
         if (s is CallState.Live || s is CallState.Joining) {
             app.account.release(HOLD)
             VoiceService.stop(app)

@@ -205,6 +205,20 @@ version 1. davey implements the group and the frame encryption; WristCord routes
 - **Voice privacy code:** 30 digits derived from the MLS epoch authenticator and shown in groups
   of five (documented, "displayable codes"). Everyone in the call sees the same code, and it
   changes when the group does.
+- **Who may be in the group.** A welcome (30) or proposal (27) naming a user the client doesn't
+  recognise must be refused (documented; davey checks it). The voice server's own announcements
+  (op 11, op 5) aren't enough for that list. It can send the welcome before announcing the
+  people already in the call, and the watch then refused every welcome, so beta.2's first real
+  call never got its keys and was silent both ways (inferred from the symptom; reproduced in
+  `DaveCallTest`). The list now also includes everyone Discord's main gateway shows in the
+  channel, the same users the voice channel screen lists.
+- **A refused welcome cannot be retried.** openmls deletes the key package while reading the
+  welcome, before the roster check runs (observed in openmls 0.8.3, `keys_for_welcome`). The
+  only way back is op 31 and a fresh key package.
+- **Unknown SSRC.** Audio can arrive before the op 5 that maps its SSRC to a user. Every member
+  has their own sender key, so the watch tries each member's key and maps the SSRC to whichever
+  opens the frame. A failed try changes nothing: davey records a nonce only after a frame
+  decrypts (tested).
 
 ## Settings protobuf
 

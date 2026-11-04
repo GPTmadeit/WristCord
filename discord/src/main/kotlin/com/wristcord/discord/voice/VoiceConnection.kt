@@ -36,6 +36,7 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 /** What a VOICE_SERVER_UPDATE + our own VOICE_STATE_UPDATE add up to. */
 data class VoiceServerInfo(
@@ -63,6 +64,25 @@ sealed interface VoiceLinkState {
     data object Closed : VoiceLinkState
 }
 
+/** What one voice connection has done so far, for the call's diagnostics. */
+data class VoiceStats(
+    val sent: Long = 0,
+    /** Speech dropped while DAVE was not ready yet: it never leaves without E2EE. */
+    val heldBack: Long = 0,
+    val encryptFailed: Long = 0,
+    val received: Long = 0,
+    /** Audio packets whose transport encryption did not open. */
+    val transportFailed: Long = 0,
+    /** Audio from an SSRC that could not be matched to anyone in the call. */
+    val unknownSender: Long = 0,
+    val daveFailed: Long = 0,
+    val delivered: Long = 0,
+    val protocolVersion: Int = 0,
+    val daveReady: Boolean = false,
+    val welcomesRejected: Int = 0,
+    val lastDaveError: String = "",
+)
+
 /**
  * One connection to a Discord voice server: the v8 voice gateway, the UDP media socket and
  * the DAVE session. Audio goes in as Opus frames through [sendOpus] and comes out through
@@ -79,6 +99,13 @@ class VoiceConnection(
     private val xchachaFactory: ((ByteArray) -> TransportCipher)? = null,
     /** Binds the UDP socket to a specific network (Wi-Fi/LTE rather than a Bluetooth proxy). */
     private val bindSocket: (DatagramSocket) -> Unit = {},
+    /**
+     * Who Discord's main gateway shows in the call. An MLS welcome or proposal may only contain
+     * these users or ones the voice server announced (op 11, op 5). The voice server does not
+     * reliably announce people already in the call before it sends the watch its welcome, and a
+     * welcome naming someone unknown is refused.
+     */
+    private val recognizedUsers: () -> Collection<Long> = { emptyList() },
     private val listener: Listener,
 ) {
     interface Listener {
@@ -103,6 +130,16 @@ class VoiceConnection(
     @Volatile private var closed = false
     @Volatile private var lastTransitionId = 0
     @Volatile private var decryptFailures = 0
+    @Volatile private var welcomesRejected = 0
+    @Volatile private var lastDaveError = ""
+    private val sent = AtomicLong()
+    private val heldBack = AtomicLong()
+    private val encryptFailed = AtomicLong()
+    private val received = AtomicLong()
+    private val transportFailed = AtomicLong()
+    private val unknownSender = AtomicLong()
+    private val daveFailed = AtomicLong()
+    private val delivered = AtomicLong()
 
     private val generation = AtomicInteger()
     private var heartbeat: Job? = null
@@ -373,8 +410,15 @@ class VoiceConnection(
             }
             VoiceOp.DAVE_MLS_WELCOME -> {
                 val tid = u16(msg.payload)
-                if (session.processWelcome(msg.payload.copyOfRange(2, msg.payload.size), knownUsers())) transitionReady(session, tid)
-                else invalid(session, tid)
+                // A refused welcome cannot be retried (MLS consumed our key package reading it);
+                // op 31 makes the server add us again with a fresh one.
+                if (session.processWelcome(msg.payload.copyOfRange(2, msg.payload.size), knownUsers())) {
+                    listener.log("voice: welcomed to the E2EE group (transition $tid)")
+                    transitionReady(session, tid)
+                } else {
+                    welcomesRejected++
+                    invalid(session, tid)
+                }
             }
         }
     }
@@ -391,12 +435,29 @@ class VoiceConnection(
     }
 
     private fun invalid(session: DaveCrypto, tid: Int) {
+        lastDaveError = session.lastError
         listener.log("voice: invalid commit/welcome for transition $tid: ${session.lastError}")
         sendJson(VoiceOp.DAVE_MLS_INVALID_COMMIT_WELCOME, buildJsonObject { put("transition_id", tid) })
         reinitDave()
     }
 
-    private fun knownUsers(): LongArray = (connected + info.userId).toLongArray()
+    private fun knownUsers(): LongArray =
+        (connected + info.userId + runCatching(recognizedUsers).getOrDefault(emptyList())).toLongArray()
+
+    fun stats() = VoiceStats(
+        sent = sent.get(),
+        heldBack = heldBack.get(),
+        encryptFailed = encryptFailed.get(),
+        received = received.get(),
+        transportFailed = transportFailed.get(),
+        unknownSender = unknownSender.get(),
+        daveFailed = daveFailed.get(),
+        delivered = delivered.get(),
+        protocolVersion = protocolVersion,
+        daveReady = dave?.isReady == true,
+        welcomesRejected = welcomesRejected,
+        lastDaveError = lastDaveError,
+    )
 
     private fun connectedState() = VoiceLinkState.Connected(
         e2ee = protocolVersion > 0 && dave?.isReady == true,
@@ -417,11 +478,17 @@ class VoiceConnection(
             protocolVersion == 0 || opus.contentEquals(OPUS_SILENCE) -> opus
             // A DAVE call whose MLS group is still forming: drop speech rather than send it with
             // transport encryption only, which Discord's servers could read.
-            session == null || !session.isReady -> return
-            else -> session.encryptOpus(opus) ?: return
+            session == null || !session.isReady -> {
+                heldBack.incrementAndGet()
+                return
+            }
+            else -> session.encryptOpus(opus) ?: run {
+                encryptFailed.incrementAndGet()
+                return
+            }
         }
         val packet = s.packet(frame)
-        runCatching { socket.send(DatagramPacket(packet, packet.size)) }
+        runCatching { socket.send(DatagramPacket(packet, packet.size)) }.onSuccess { sent.incrementAndGet() }
     }
 
     /** Stop transmitting: five silence frames (so the far side does not interpolate), then op 5 off. */
@@ -451,30 +518,59 @@ class VoiceConnection(
                 if (!closed) listener.log("voice: udp receive stopped: ${t.message}")
                 return
             }
+            received.incrementAndGet()
             val c = cipher ?: continue
             if (p.length < 12) continue
-            val rtp = RtpReceiver.open(buf.copyOf(p.length), c) ?: continue
-            val user = ssrcUsers[rtp.ssrc]
-            val opus = daveDecrypt(user, rtp.payload) ?: continue
-            listener.onOpus(user, rtp.ssrc, rtp.sequence, opus)
+            val rtp = RtpReceiver.open(buf.copyOf(p.length), c) ?: run {
+                if (buf[1].toInt() and 0x7F == RtpSender.PAYLOAD_TYPE) transportFailed.incrementAndGet()
+                null
+            } ?: continue
+            val (user, opus) = daveDecrypt(rtp.ssrc, rtp.payload) ?: continue
+            delivered.incrementAndGet()
+            // A bad frame or a failing decoder must not take the whole receive path down.
+            runCatching { listener.onOpus(user, rtp.ssrc, rtp.sequence, opus) }
+                .onFailure { if (delivered.get() < 5 || delivered.get() % 500 == 0L) listener.log("voice: playback failed: $it") }
         }
     }
 
-    /** discord.js's rule: pass through silence and anything we cannot decrypt yet; drop failures. */
-    private fun daveDecrypt(user: Long?, frame: ByteArray): ByteArray? {
-        if (frame.contentEquals(OPUS_SILENCE)) return frame
+    /**
+     * discord.js's rule: pass through silence and anything we cannot decrypt yet; drop failures.
+     * Returns who sent the frame (when known) and the Opus inside it.
+     */
+    private fun daveDecrypt(ssrc: Int, frame: ByteArray): Pair<Long?, ByteArray>? {
+        var user = ssrcUsers[ssrc]
+        if (frame.contentEquals(OPUS_SILENCE)) return user to frame
         val session = dave
-        if (protocolVersion == 0 && (session == null || user == null || !session.canPassthrough(user))) return frame
+        if (protocolVersion == 0 && (session == null || user == null || !session.canPassthrough(user))) return user to frame
         if (session == null || !session.isReady) return null
-        if (user == null) return null
+        if (user == null) {
+            // No op 5 for this SSRC yet: each member has their own key, so the one whose key
+            // opens the frame is the sender. (Decrypting twice would trip replay protection.)
+            return identify(session, ssrc, frame) ?: run {
+                unknownSender.incrementAndGet()
+                null
+            }
+        }
         val out = session.decrypt(user, frame)
         if (out != null) {
             decryptFailures = 0
-            return out
+            return user to out
         }
+        daveFailed.incrementAndGet()
         if (pendingTransitions.isEmpty() && ++decryptFailures > DECRYPT_FAILURE_TOLERANCE) {
             decryptFailures = 0
             invalid(session, lastTransitionId)
+        }
+        return null
+    }
+
+    private fun identify(session: DaveCrypto, ssrc: Int, frame: ByteArray): Pair<Long, ByteArray>? {
+        val candidates = (connected + runCatching(recognizedUsers).getOrDefault(emptyList())) - info.userId
+        for (candidate in candidates.take(MAX_SENDER_GUESSES)) {
+            val out = session.decrypt(candidate, frame) ?: continue
+            ssrcUsers[ssrc] = candidate
+            listener.log("voice: ssrc $ssrc is user $candidate (matched by key)")
+            return candidate to out
         }
         return null
     }
@@ -556,5 +652,7 @@ class VoiceConnection(
         const val DOWNGRADE_EXPIRY_S = 24
         /** discord.js's default: this many undecryptable frames in a row means the keys diverged. */
         const val DECRYPT_FAILURE_TOLERANCE = 36
+        /** Calls on a watch are small; never try more keys than this for one unknown SSRC. */
+        const val MAX_SENDER_GUESSES = 25
     }
 }
