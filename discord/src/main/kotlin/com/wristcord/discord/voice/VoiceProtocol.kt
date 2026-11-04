@@ -130,27 +130,38 @@ class AesGcmTransport(key: ByteArray) : TransportCipher {
 }
 
 /**
- * Outgoing RTP for one SSRC: 12-byte header (0x80, payload type 0x78, sequence, timestamp,
- * SSRC) as AAD, then ciphertext and tag, then the 4-byte big-endian nonce counter that the
- * AEAD nonce is built from (zero-padded to the cipher's nonce size).
+ * Outgoing RTP for one SSRC: 12-byte header (0x80, marker + payload type 0x78, sequence,
+ * timestamp, SSRC) as AAD, then ciphertext and tag, then the 4-byte big-endian nonce counter
+ * that the AEAD nonce is built from (zero-padded to the cipher's nonce size).
  */
 class RtpSender(private val ssrc: Int, private val cipher: TransportCipher) {
     private val random = SecureRandom()
     private var sequence = random.nextInt(1 shl 16)
-    private var timestamp = random.nextInt().toLong() and 0xFFFFFFFFL
+    private val timestampBase = random.nextInt().toLong() and 0xFFFFFFFFL
+    private var lastFrame = -1L
     private var nonce = 0L
 
+    /**
+     * [frame] is the 20 ms capture frame the audio came from, counted from the start of the call.
+     * The timestamp then follows real time across the pauses voice activity leaves, and the first
+     * packet after one carries the marker bit (RFC 3551): receivers schedule playout from both,
+     * and a timestamp that ignored the pause makes each sentence's first words look late. Null
+     * continues straight after the previous packet (the silence frames that end a sentence).
+     */
     @Synchronized
-    fun packet(opus: ByteArray, samples: Int = FRAME_SAMPLES): ByteArray {
+    fun packet(opus: ByteArray, frame: Long? = null): ByteArray {
+        // Never backwards: speech resuming right after the silence frames reuses no timestamp.
+        val f = if (frame == null || frame <= lastFrame) lastFrame + 1 else frame
+        val talkspurt = lastFrame < 0 || f != lastFrame + 1
+        lastFrame = f
         val header = ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN).apply {
             put(0x80.toByte())
-            put(PAYLOAD_TYPE.toByte())
+            put(((if (talkspurt) MARKER else 0) or PAYLOAD_TYPE).toByte())
             putShort(sequence.toShort())
-            putInt(timestamp.toInt())
+            putInt(((timestampBase + f * FRAME_SAMPLES) and 0xFFFFFFFFL).toInt())
             putInt(ssrc)
         }.array()
         sequence = (sequence + 1) and 0xFFFF
-        timestamp = (timestamp + samples) and 0xFFFFFFFFL
         nonce = (nonce + 1) and 0xFFFFFFFFL
         val nonceBytes = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(nonce.toInt()).array()
         val fullNonce = ByteArray(cipher.nonceSize).also { nonceBytes.copyInto(it, 0) }
@@ -159,6 +170,7 @@ class RtpSender(private val ssrc: Int, private val cipher: TransportCipher) {
     }
 
     companion object {
+        const val MARKER = 0x80
         const val PAYLOAD_TYPE = 0x78
         const val FRAME_SAMPLES = 960 // 20 ms at 48 kHz
     }

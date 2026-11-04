@@ -6,7 +6,7 @@
 use std::os::raw::c_int;
 
 use jni::objects::{JByteArray, JClass, JShortArray};
-use jni::sys::{jbyteArray, jint, jlong};
+use jni::sys::{jboolean, jbyteArray, jint, jlong};
 use jni::JNIEnv;
 use opusic_sys::*;
 
@@ -46,7 +46,9 @@ pub extern "system" fn Java_com_wristcord_wear_voice_NativeOpus_nativeDecoderDes
 }
 
 /// Decodes `packet` into `out` (interleaved), or with a null packet conceals one lost 20 ms
-/// frame. Returns samples per channel, or a negative libopus error.
+/// frame. With `fec`, rebuilds instead the 20 ms *before* `packet` from the in-band FEC it
+/// carries (plain concealment if it has none). Returns samples per channel, or a negative
+/// libopus error.
 #[no_mangle]
 pub extern "system" fn Java_com_wristcord_wear_voice_NativeOpus_nativeDecode(
     env: JNIEnv,
@@ -54,6 +56,7 @@ pub extern "system" fn Java_com_wristcord_wear_voice_NativeOpus_nativeDecode(
     handle: jlong,
     packet: JByteArray,
     out: JShortArray,
+    fec: jboolean,
 ) -> jint {
     if handle == 0 {
         return OPUS_INVALID_STATE;
@@ -69,7 +72,9 @@ pub extern "system" fn Java_com_wristcord_wear_voice_NativeOpus_nativeDecode(
         unsafe { opus_decode(d.state, std::ptr::null(), 0, pcm.as_mut_ptr(), FRAME.min(frame as c_int), 0) }
     } else {
         let data = env.convert_byte_array(&packet).unwrap_or_default();
-        unsafe { opus_decode(d.state, data.as_ptr(), data.len() as i32, pcm.as_mut_ptr(), frame as c_int, 0) }
+        // FEC must be asked for exactly the lost frame's duration.
+        let (size, flag) = if fec != 0 { (FRAME.min(frame as c_int), 1) } else { (frame as c_int, 0) };
+        unsafe { opus_decode(d.state, data.as_ptr(), data.len() as i32, pcm.as_mut_ptr(), size, flag) }
     };
     if n > 0 && env.set_short_array_region(&out, 0, &pcm[..n as usize * d.channels]).is_err() {
         return OPUS_INTERNAL_ERROR;

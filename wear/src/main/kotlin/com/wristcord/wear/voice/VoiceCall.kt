@@ -174,7 +174,7 @@ class VoiceCall(private val app: WristCordApp) {
             .readTimeout(0, TimeUnit.MILLISECONDS)
             .apply { bound?.let { socketFactory(it.socketFactory) } }
             .build()
-        val audio = AudioEngine(app, onFrame = { connection?.sendOpus(it) }, onQuiet = { connection?.stopTransmitting() })
+        val audio = AudioEngine(app, onFrame = { opus, frame -> connection?.sendOpus(opus, frame) }, onQuiet = { connection?.stopTransmitting() })
         engine = audio
         val conn = connect(cs, VoiceServerInfo(guildId ?: channelId, channelId, me.id, vs.sessionId ?: client.state.value.mySessionId.orEmpty(), srv.token, srv.endpoint!!), http, bound)
         val first = withTimeoutOrNull(20_000) { conn.state.first { it is VoiceLinkState.Connected || it is VoiceLinkState.Failed } }
@@ -198,6 +198,8 @@ class VoiceCall(private val app: WristCordApp) {
             bindSocket = { s -> bound?.bindSocket(s) },
             // Who the main gateway shows in the channel: the members an MLS welcome may name.
             recognizedUsers = { app.discord.state.value.voiceIn(info.channelId).map { it.userId } },
+            // Incoming audio is decrypted and queued there: it must not wait behind the UI.
+            mediaThreadSetup = { android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO) },
             listener = object : VoiceConnection.Listener {
                 override fun onOpus(userId: Long?, ssrc: Int, sequence: Int, opus: ByteArray) {
                     userId?.let { ssrcUsers[ssrc] = it }

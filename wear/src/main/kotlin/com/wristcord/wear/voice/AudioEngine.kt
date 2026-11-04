@@ -16,6 +16,7 @@ import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
 import android.util.Log
+import com.wristcord.discord.voice.JitterBuffer
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -56,19 +57,36 @@ data class AudioStats(
     /** False while the call is silenced because Android routed it to the watch itself. */
     val routeOk: Boolean = true,
     val error: String = "",
+    /** The jitter buffer's playout delay (the largest over the speakers), in ms. */
+    val bufferMs: Int = 0,
+    val lost: Long = 0,
+    /** Lost packets rebuilt from the next packet's Opus FEC. */
+    val recovered: Long = 0,
+    val concealed: Long = 0,
+    val late: Long = 0,
+    /** Times the network let a speaker run dry mid-sentence. */
+    val networkGaps: Long = 0,
+    val skipped: Long = 0,
+    /** Times Android's audio output ran out of audio: the watch fell behind. */
+    val outputUnderruns: Int = 0,
+    /** Longest wait between two packets from one speaker in the last 5 s. */
+    val arrivalGapMs: Long = 0,
+    val decodeUs: Long = 0,
+    val encodeUs: Long = 0,
 )
 
 /**
- * The watch end of a call: capture from the headset mic, Opus-encode, hand frames to the
- * network; and on the way back, decode each speaker, buffer a little, mix, play to the headset.
+ * The watch end of a call: capture, Opus-encode and hand frames to the network; on the way
+ * back, a jitter buffer per speaker, decode, mix, play to the headset.
  *
- * Routing goes through the platform's call path (MODE_IN_COMMUNICATION + setCommunicationDevice),
- * which brings the system's echo cancellation and noise suppression with it.
+ * Decoding happens at playout, on the audio-priority playback thread: the network thread only
+ * queues packets, so a busy moment (you talking: encode, encrypt, send) can no longer delay
+ * incoming audio into gaps.
  */
 class AudioEngine(
     private val ctx: Context,
-    /** Called on the capture thread with each encoded 20 ms frame while you are talking. */
-    private val onFrame: (ByteArray) -> Unit,
+    /** Called on the capture thread with each encoded 20 ms frame and its capture frame number. */
+    private val onFrame: (ByteArray, Long) -> Unit,
     /** Called when you go quiet (or mute), so the network can send its silence frames. */
     private val onQuiet: () -> Unit,
 ) {
@@ -86,27 +104,49 @@ class AudioEngine(
     @Volatile private var error = ""
     @Volatile private var micLevel = 0
     @Volatile private var micSource = ""
+    @Volatile private var track: AudioTrack? = null
     private val captured = AtomicLong()
     private val silentCapture = AtomicLong()
     private val loudFrames = AtomicLong()
     private val encoded = AtomicLong()
     private val decoded = AtomicLong()
     private val played = AtomicLong()
+    private val decodeNs = AtomicLong()
+    private val encodeNs = AtomicLong()
+    @Volatile private var gapWindowStart = 0L
+    @Volatile private var gapWindowMax = 0L
+    @Volatile private var gapLastWindow = 0L
 
-    fun stats() = AudioStats(
-        captured = captured.get(),
-        silentCapture = silentCapture.get(),
-        loud = loudFrames.get(),
-        encoded = encoded.get(),
-        decoded = decoded.get(),
-        played = played.get(),
-        micLevel = micLevel,
-        micSource = micSource,
-        route = routeName,
-        path = path?.label.orEmpty(),
-        routeOk = routedToHeadset,
-        error = error,
-    )
+    fun stats(): AudioStats {
+        val jitter = streams.values.map { it.jitter.stats() }
+        val enc = encoded.get()
+        val dec = decoded.get()
+        return AudioStats(
+            captured = captured.get(),
+            silentCapture = silentCapture.get(),
+            loud = loudFrames.get(),
+            encoded = enc,
+            decoded = dec,
+            played = played.get(),
+            micLevel = micLevel,
+            micSource = micSource,
+            route = routeName,
+            path = path?.label.orEmpty(),
+            routeOk = routedToHeadset,
+            error = error,
+            bufferMs = (jitter.maxOfOrNull { it.targetFrames } ?: 0) * FRAME_MS,
+            lost = jitter.sumOf { it.lost },
+            recovered = jitter.sumOf { it.recovered },
+            concealed = jitter.sumOf { it.concealed },
+            late = jitter.sumOf { it.late },
+            networkGaps = jitter.sumOf { it.underruns },
+            skipped = jitter.sumOf { it.skipped } + jitter.sumOf { it.overflows },
+            outputUnderruns = runCatching { track?.underrunCount ?: 0 }.getOrDefault(0),
+            arrivalGapMs = maxOf(gapLastWindow, gapWindowMax),
+            decodeUs = if (dec > 0) decodeNs.get() / dec / 1_000 else 0,
+            encodeUs = if (enc > 0) encodeNs.get() / enc / 1_000 else 0,
+        )
+    }
 
     private val _speaking = MutableStateFlow<Set<Int>>(emptySet())
     /** SSRCs heard in the last few hundred ms - drives the speaking rings in the UI. */
@@ -126,13 +166,14 @@ class AudioEngine(
     private val streams = ConcurrentHashMap<Int, Stream>()
     private val am = ctx.getSystemService(AudioManager::class.java)
 
+    /** One remote speaker. The decoder and [pending] are only touched by the playback thread. */
     private class Stream {
         val decoder = OpusDecoder()
-        val queue = ArrayDeque<ShortArray>()
-        var lastSeq = -1
-        var started = false
-        var underruns = 0
-        var lastHeard = 0L
+        val jitter = JitterBuffer()
+        /** Decoded audio not played yet, when a packet held more than 20 ms. */
+        val pending = ArrayDeque<ShortArray>()
+        @Volatile var lastArrival = 0L
+        @Volatile var lastHeard = 0L
     }
 
     /**
@@ -205,31 +246,49 @@ class AudioEngine(
         _speaking.value = emptySet()
     }
 
-    /** From the network thread: one decrypted Opus frame from [ssrc]. */
+    /** From the network thread: one decrypted Opus frame from [ssrc]. Only queues it. */
     fun onRemote(ssrc: Int, sequence: Int, opus: ByteArray) {
         if (!running) return
         val s = streams[ssrc] ?: runCatching { Stream() }.getOrElse {
-            if (error.isEmpty()) Log.e(TAG, "no Opus decoder on this watch", it)
-            error = "No Opus decoder on this watch"
+            if (error.isEmpty()) Log.e(TAG, "no Opus decoder", it)
+            error = "No Opus decoder"
             return
         }.also { streams[ssrc] = it }
-        synchronized(s) {
-            // Drop late duplicates; a gap of more than half the sequence space means wrap-around.
-            if (s.lastSeq >= 0) {
-                val delta = (sequence - s.lastSeq + 65536) % 65536
-                if (delta == 0 || delta > 32768) return
-            }
-            // A short gap: Opus conceals each lost 20 ms so speech does not jump.
-            if (s.lastSeq >= 0) {
-                val missing = (sequence - s.lastSeq + 65535) % 65536
-                if (missing in 1..MAX_CONCEALED) repeat(missing) { s.decoder.conceal()?.let { queue(s, it) } }
-            }
-            s.lastSeq = sequence
-            val pcm = runCatching { s.decoder.decode(opus) }.getOrNull() ?: return
-            decoded.incrementAndGet()
-            queue(s, if (s.decoder.outputChannels == 1) upmix(pcm) else pcm)
-            s.lastHeard = System.currentTimeMillis()
+        val t = SystemClock.elapsedRealtime()
+        if (t - gapWindowStart > GAP_WINDOW_MS) {
+            gapLastWindow = gapWindowMax
+            gapWindowMax = 0
+            gapWindowStart = t
         }
+        // Gaps across a pause in speech are not network trouble: only count those inside speech.
+        val gap = t - s.lastArrival
+        if (s.lastArrival != 0L && gap < SPEECH_PAUSE_MS && gap > gapWindowMax) gapWindowMax = gap
+        s.lastArrival = t
+        s.lastHeard = System.currentTimeMillis()
+        s.jitter.push(sequence, opus)
+    }
+
+    /** The next 20 ms of [s], decoded now on the playback thread; null when it is not playing. */
+    private fun next(s: Stream): ShortArray? {
+        s.pending.pollFirst()?.let { return it }
+        val started = System.nanoTime()
+        val pcm = when (val n = s.jitter.pull()) {
+            is JitterBuffer.Next.Play -> s.decoder.decode(n.packet)
+            is JitterBuffer.Next.Recover -> s.decoder.recover(n.following) ?: s.decoder.conceal()
+            JitterBuffer.Next.Conceal -> s.decoder.conceal()
+            JitterBuffer.Next.Silent -> return null
+        } ?: return null
+        decodeNs.addAndGet(System.nanoTime() - started)
+        decoded.incrementAndGet()
+        val stereo = if (s.decoder.outputChannels == 1) upmix(pcm) else pcm
+        if (stereo.size <= FRAME_SHORTS_STEREO) return stereo
+        // A packet longer than 20 ms: play it out block by block.
+        var at = FRAME_SHORTS_STEREO
+        while (at < stereo.size) {
+            s.pending.addLast(stereo.copyOfRange(at, minOf(at + FRAME_SHORTS_STEREO, stereo.size)))
+            at += FRAME_SHORTS_STEREO
+        }
+        return stereo.copyOfRange(0, FRAME_SHORTS_STEREO)
     }
 
     /**
@@ -240,17 +299,6 @@ class AudioEngine(
     private fun micSources(): List<Int> = when (path) {
         AudioPath.CALL -> listOf(MediaRecorder.AudioSource.VOICE_COMMUNICATION, MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC)
         else -> listOf(MediaRecorder.AudioSource.VOICE_RECOGNITION, MediaRecorder.AudioSource.MIC, MediaRecorder.AudioSource.VOICE_COMMUNICATION)
-    }
-
-    /** Queue decoded audio in 20 ms blocks: the mixer plays exactly one block per tick. */
-    private fun queue(s: Stream, pcm: ShortArray) {
-        var at = 0
-        while (at < pcm.size) {
-            val end = minOf(at + FRAME_SHORTS_STEREO, pcm.size)
-            s.queue.addLast(if (at == 0 && end == pcm.size) pcm else pcm.copyOfRange(at, end))
-            at = end
-        }
-        while (s.queue.size > MAX_QUEUED) s.queue.removeFirst()
     }
 
     @SuppressLint("MissingPermission") // RECORD_AUDIO is checked before a call is joined.
@@ -279,11 +327,25 @@ class AudioEngine(
         }
         micSource = sourceName(sources[0])
         val frame = ByteArray(FRAME_BYTES_MONO)
+        val previous = ByteArray(FRAME_BYTES_MONO)
+        var previousIndex = -1L
         var hangover = 0
         var peak = 0.0
         var frames = 0
         var zeros = 0
         var floor = 0.0
+        var gain = 1.0
+
+        fun send(pcm: ByteArray, index: Long) {
+            val started = System.nanoTime()
+            val packets = encoder.encode(pcm)
+            encodeNs.addAndGet(System.nanoTime() - started)
+            for (packet in packets) {
+                encoded.incrementAndGet()
+                onFrame(packet, index)
+            }
+        }
+
         try {
             while (running) {
                 var read = 0
@@ -293,7 +355,7 @@ class AudioEngine(
                     read += n
                 }
                 if (read < frame.size) continue
-                captured.incrementAndGet()
+                val index = captured.incrementAndGet() - 1
                 val level = rms(frame)
                 if (level == 0.0) {
                     silentCapture.incrementAndGet()
@@ -324,18 +386,30 @@ class AudioEngine(
                 val loud = level > maxOf(VAD_MIN, floor * VAD_OVER_FLOOR)
                 if (loud) loudFrames.incrementAndGet()
                 if (loud) hangover = HANGOVER_FRAMES else if (hangover > 0) hangover--
+                // Media mode's mic is on the wrist, at arm's length: lift speech toward a steady
+                // level, cutting at once when it gets loud and climbing back slowly.
+                if (path == AudioPath.MEDIA) {
+                    if (loud) {
+                        val want = (AGC_TARGET / level).coerceIn(1.0, AGC_MAX)
+                        gain = if (want < gain) want else gain + (want - gain) * AGC_RISE
+                    }
+                    amplify(frame, gain)
+                }
                 if (!micEnabled || !routedToHeadset || hangover == 0) {
                     if (_talking.value) {
                         _talking.value = false
                         onQuiet()
                     }
+                    frame.copyInto(previous)
+                    previousIndex = index
                     continue
                 }
-                _talking.value = true
-                for (packet in encoder.encode(frame)) {
-                    encoded.incrementAndGet()
-                    onFrame(packet)
+                if (!_talking.value) {
+                    _talking.value = true
+                    // The frame before voice activity fired often holds the start of the word.
+                    if (previousIndex == index - 1) send(previous, previousIndex)
                 }
+                send(frame, index)
             }
         } catch (t: Throwable) {
             Log.e(TAG, "capture failed", t)
@@ -359,6 +433,9 @@ class AudioEngine(
 
     private fun playbackLoop() {
         Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
+        // Call audio wants low latency; media audio over A2DP already adds ~200 ms and gains
+        // nothing from it, so it gets a deeper output buffer that rides out a slow moment.
+        val media = path == AudioPath.MEDIA
         val track = AudioTrack.Builder()
             .setAudioAttributes(attributes())
             .setAudioFormat(
@@ -369,9 +446,10 @@ class AudioEngine(
                     .build()
             )
             .setTransferMode(AudioTrack.MODE_STREAM)
-            .setPerformanceMode(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
-            .setBufferSizeInBytes(FRAME_SHORTS_STEREO * 2 * 4)
+            .setPerformanceMode(if (media) AudioTrack.PERFORMANCE_MODE_NONE else AudioTrack.PERFORMANCE_MODE_LOW_LATENCY)
+            .setBufferSizeInBytes(FRAME_SHORTS_STEREO * 2 * if (media) MEDIA_BUFFER_FRAMES else CALL_BUFFER_FRAMES)
             .build()
+        this.track = track
         val onRoute = AudioRouting.OnRoutingChangedListener { r ->
             val d = r.routedDevice
             routeName = Headset.describe(d)
@@ -385,6 +463,9 @@ class AudioEngine(
         var tick = 0
         try {
             track.play()
+            // Fill the output buffer with silence first, so the loop is paced by real time from
+            // its first tick instead of racing through the jitter buffer while the buffer fills.
+            repeat(if (media) MEDIA_BUFFER_FRAMES else CALL_BUFFER_FRAMES) { track.write(out, 0, out.size) }
             while (running) {
                 mix.fill(0)
                 val heard = HashSet<Int>()
@@ -394,16 +475,7 @@ class AudioEngine(
                         streams.remove(ssrc)?.let { runCatching { it.decoder.close() } }
                         continue
                     }
-                    val pcm = synchronized(s) {
-                        // A small cushion before a speaker starts, so jitter does not crackle;
-                        // a brief gap plays silence instead of re-buffering at once.
-                        if (!s.started && s.queue.size >= START_FRAMES) s.started = true
-                        if (!s.started) return@synchronized null
-                        s.queue.pollFirst().also {
-                            if (it != null) s.underruns = 0
-                            else if (++s.underruns >= MAX_UNDERRUNS) s.started = false
-                        }
-                    } ?: continue
+                    val pcm = next(s) ?: continue
                     if (rmsShorts(pcm) > SPEAKING_THRESHOLD) heard += ssrc
                     for (i in 0 until minOf(pcm.size, mix.size)) mix[i] += pcm[i].toInt()
                 }
@@ -416,6 +488,7 @@ class AudioEngine(
         } catch (t: Throwable) {
             Log.e(TAG, "playback failed", t)
         } finally {
+            this.track = null
             track.removeOnRoutingChangedListener(onRoute)
             runCatching { track.stop() }
             track.release()
@@ -433,6 +506,19 @@ class AudioEngine(
         return sqrt(sum / (pcm16le.size / 2))
     }
 
+    /** Scales 16-bit little-endian PCM in place, saturating instead of wrapping. */
+    private fun amplify(pcm16le: ByteArray, gain: Double) {
+        if (gain <= 1.001) return
+        var i = 0
+        while (i + 1 < pcm16le.size) {
+            val v = ((pcm16le[i + 1].toInt() shl 8) or (pcm16le[i].toInt() and 0xFF)).toShort()
+            val g = (v * gain).toInt().coerceIn(-32768, 32767)
+            pcm16le[i] = g.toByte()
+            pcm16le[i + 1] = (g shr 8).toByte()
+            i += 2
+        }
+    }
+
     private fun rmsShorts(pcm: ShortArray): Double {
         var sum = 0.0
         for (v in pcm) sum += v.toDouble() * v
@@ -443,25 +529,30 @@ class AudioEngine(
 
     private companion object {
         const val TAG = "WristCord/Audio"
+        const val FRAME_MS = 20
         const val FRAME_BYTES_MONO = OpusEncoder.FRAME_SAMPLES * 2
         const val FRAME_SHORTS_STEREO = OpusEncoder.FRAME_SAMPLES * 2
-        const val MAX_QUEUED = 6
-        const val START_FRAMES = 2
         /** How long Android gets to bring up headset call audio, and how long it must hold. */
         const val CALL_ROUTE_WAIT_MS = 2_500L
         const val CALL_ROUTE_SETTLE_MS = 600L
-        /** 100 ms without a frame before a speaker re-buffers. */
-        const val MAX_UNDERRUNS = 5
+        /** Output buffer: 80 ms on call audio, 160 ms on media audio. */
+        const val CALL_BUFFER_FRAMES = 4
+        const val MEDIA_BUFFER_FRAMES = 8
         const val STREAM_IDLE_MS = 30_000L
+        /** Window for the longest-arrival-gap statistic, and what counts as a pause in speech. */
+        const val GAP_WINDOW_MS = 5_000L
+        const val SPEECH_PAUSE_MS = 400L
         /** Voice activity: this far over the noise floor, and never below [VAD_MIN]. */
         const val VAD_OVER_FLOOR = 3.0
         const val VAD_MIN = 60.0
         /** Per-frame rise of the noise floor estimate (falls are immediate). */
         const val FLOOR_RISE = 0.002
+        /** Wrist-mic gain in media mode: toward this speech level, at most +12 dB. */
+        const val AGC_TARGET = 3_000.0
+        const val AGC_MAX = 4.0
+        const val AGC_RISE = 0.05
         /** One second of exact digital silence and the next mic source is tried. */
         const val SILENT_SOURCE_FRAMES = 50
-        /** Gaps up to this many packets are concealed; longer ones are a pause. */
-        const val MAX_CONCEALED = 3
         const val SPEAKING_THRESHOLD = 250.0
         /** Keep sending for 300 ms after the last loud frame so words are not clipped. */
         const val HANGOVER_FRAMES = 15

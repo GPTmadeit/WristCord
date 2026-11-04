@@ -106,6 +106,8 @@ class VoiceConnection(
      * welcome naming someone unknown is refused.
      */
     private val recognizedUsers: () -> Collection<Long> = { emptyList() },
+    /** Runs first on the media (UDP) thread: the watch raises it to audio priority. */
+    private val mediaThreadSetup: () -> Unit = {},
     private val listener: Listener,
 ) {
     interface Listener {
@@ -308,6 +310,7 @@ class VoiceConnection(
     }
 
     private fun udpHandshake(gen: Int, ip: String, port: Int, mode: String) {
+        runCatching(mediaThreadSetup)
         try {
             val socket = DatagramSocket()
             bindSocket(socket)
@@ -467,13 +470,16 @@ class VoiceConnection(
 
     // ---- media ------------------------------------------------------------------------------
 
-    /** Encrypts and sends one 20 ms Opus frame. Safe to call from the capture thread. */
-    fun sendOpus(opus: ByteArray) {
+    /**
+     * Encrypts and sends one 20 ms Opus frame. Safe to call from the capture thread.
+     * [captureFrame] numbers the 20 ms frame it was captured in (see [RtpSender.packet]).
+     */
+    fun sendOpus(opus: ByteArray, captureFrame: Long? = null) {
         val s = sender ?: return
         val socket = udp ?: return
         if (!speaking) setSpeaking(true)
         val session = dave
-        val frame = when {
+        val payload = when {
             // Silence frames always go out as they are (DAVE spec: "silence packets").
             protocolVersion == 0 || opus.contentEquals(OPUS_SILENCE) -> opus
             // A DAVE call whose MLS group is still forming: drop speech rather than send it with
@@ -487,7 +493,7 @@ class VoiceConnection(
                 return
             }
         }
-        val packet = s.packet(frame)
+        val packet = s.packet(payload, captureFrame)
         runCatching { socket.send(DatagramPacket(packet, packet.size)) }.onSuccess { sent.incrementAndGet() }
     }
 

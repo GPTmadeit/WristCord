@@ -82,7 +82,49 @@ Since beta.4 the watch uses **libopus** (Xiph.Org's reference implementation, vi
 compiled into `native/dave`: one packet in, one 20 ms frame out, synchronously, with Opus's
 own loss concealment for gaps.
 
-## 6. Verified in a real call
+## 6. Choppy incoming audio: the network, and the playout that couldn't cope
+
+After beta.4, incoming speech came through choppy, most noticeably while you talked too.
+What the watch showed (observed):
+- Its Wi-Fi was on **2.4 GHz** (channel 6, 2437 MHz), the band its Bluetooth link to the buds
+  shares a radio with.
+- Pings to it on the LAN took **83-143 ms**. That's Wi-Fi power save: the access point holds a
+  sleeping watch's packets and delivers them in bunches.
+
+The playout couldn't absorb that. It started after 40 ms, held at most 120 ms, and dropped the
+oldest audio whenever more arrived at once. It also discarded out-of-order packets, 1.8% in
+the first real call, and decoded on the network thread at normal priority. There the
+audio-priority mic thread (encode, encrypt, send) could hold it up while you talked.
+
+Since beta.5:
+- **A real jitter buffer** (`discord/.../voice/JitterBuffer.kt`, unit-tested):
+  - reorders by sequence number;
+  - adapts its delay from 60 ms upward each time the network runs it dry mid-sentence, and
+    back down after 10 s of calm;
+  - absorbs bursts up to 500 ms whole;
+  - rebuilds a single lost packet from the next one's Opus in-band FEC, and conceals the rest;
+  - treats running dry after a speaker's silence frames as the end of a sentence, not a stall.
+- **Decoding at playout**, on the audio-priority playback thread. The network thread now
+  only decrypts and queues, at audio priority itself.
+- **A deeper output buffer for media audio** (160 ms; A2DP adds ~200 ms anyway), pre-filled
+  so playback is paced from the first tick.
+- **A low-latency Wi-Fi lock** for the length of a call, against power-save bunching.
+
+On the watch, under a stress test, the engine played clean: Wi-Fi-style bunches of 5 packets
+every 100 ms, shuffled, 2% lost, with a second thread doing your side's encode and encrypt at
+50 frames a second. It had no output underruns; the lost packet was rebuilt from FEC.
+Decoding cost ~1 ms per frame and encoding ~3.5 ms.
+
+Outgoing audio was fixed too. RTP timestamps now follow capture time across pauses, and
+the first packet of each sentence carries the marker bit (RFC 3551), so the far end's playout
+schedules it correctly. Before, every sentence's first words looked late. The frame just
+before voice activity fires is sent too, and the wrist mic gets up to +12 dB of gain in media
+mode.
+
+Not changeable from an app: Bluetooth and 2.4 GHz Wi-Fi share the watch's radio. If audio
+still breaks up only while you talk, a 5 GHz network (or LTE) for the watch would help.
+
+## 7. Verified in a real call
 
 Here is beta.4's first real Discord call on the watch after 85 s (observed, from its
 `WristCord/Call` stats):

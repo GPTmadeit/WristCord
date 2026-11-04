@@ -5,6 +5,7 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import android.net.NetworkRequest
+import android.net.wifi.WifiManager
 import android.util.Log
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeoutOrNull
@@ -15,15 +16,24 @@ import kotlin.coroutines.resume
  * chat but is the wrong pipe for a live call's UDP stream. For the length of a call the watch
  * asks Wear OS for Wi-Fi or LTE, the documented way to get a high-bandwidth network, and binds
  * the media socket to it. If neither comes up in a few seconds the call uses whatever is there.
+ *
+ * It also holds a low-latency Wi-Fi lock for the call. In power save, the access point holds
+ * a sleeping watch's packets and hands them over in bunches, which a live call hears as gaps.
  */
 class CallNetwork(ctx: Context) {
     private val cm = ctx.getSystemService(ConnectivityManager::class.java)
     private var callback: ConnectivityManager.NetworkCallback? = null
+    private val wifiLock: WifiManager.WifiLock? = runCatching {
+        ctx.applicationContext.getSystemService(WifiManager::class.java)
+            .createWifiLock(WifiManager.WIFI_MODE_FULL_LOW_LATENCY, "WristCord:call")
+            .apply { setReferenceCounted(false) }
+    }.getOrNull()
 
     @Volatile var network: Network? = null
         private set
 
     suspend fun acquire(timeoutMs: Long = 4_000): Network? {
+        runCatching { wifiLock?.acquire() }
         val request = NetworkRequest.Builder()
             .addCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
             .addTransportType(NetworkCapabilities.TRANSPORT_WIFI)
@@ -53,6 +63,7 @@ class CallNetwork(ctx: Context) {
     }
 
     fun release() {
+        runCatching { if (wifiLock?.isHeld == true) wifiLock.release() }
         callback?.let { runCatching { cm.unregisterNetworkCallback(it) } }
         callback = null
         network = null

@@ -219,10 +219,12 @@ private fun diagnosticsText(d: CallDiagnostics): Pair<String, Boolean> {
         if (l.unknownSender > 0) add("${l.unknownSender} frames from an unknown sender")
         if (a.captured > 100 && a.silentCapture * 2 > a.captured) add("The mic is giving silence")
         else if (a.captured > 250 && a.loud == 0L) add("Your voice is not reaching the mic (level ${a.micLevel})")
+        if (a.outputUnderruns > 0) add("The watch fell behind playing audio ×${a.outputUnderruns}")
     }
     val lines = listOf(
         "Sent ${l.sent} · received ${l.received} · heard ${l.delivered}",
         "Mic ${a.micLevel}${if (a.micSource.isNotEmpty()) " (${a.micSource})" else ""} · played ${a.played}",
+        "Buffer ${a.bufferMs} ms · lost ${a.lost} (${a.recovered} rebuilt) · gaps ${a.networkGaps} · late ${a.late}",
         listOf(a.path, a.route).filter { it.isNotEmpty() }.joinToString(" → "),
         d.network,
     ) + problems

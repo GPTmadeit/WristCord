@@ -51,9 +51,13 @@ class OpusDecoder : AutoCloseable {
     @Synchronized
     fun conceal(): ShortArray? = run(null)
 
-    private fun run(packet: ByteArray?): ShortArray? {
+    /** The lost 20 ms just before [following], rebuilt from the in-band FEC it carries. */
+    @Synchronized
+    fun recover(following: ByteArray): ShortArray? = run(following, fec = true)
+
+    private fun run(packet: ByteArray?, fec: Boolean = false): ShortArray? {
         if (handle == 0L) return null
-        val samples = NativeOpus.decode(handle, packet, buffer)
+        val samples = NativeOpus.decode(handle, packet, buffer, fec)
         return if (samples > 0) buffer.copyOf(samples * CHANNELS) else null
     }
 
@@ -80,13 +84,13 @@ internal object NativeOpus {
     fun encode(handle: Long, pcm: ShortArray): ByteArray? = nativeEncode(handle, pcm)
     fun encoderDestroy(handle: Long) = nativeEncoderDestroy(handle)
     fun decoderNew(channels: Int): Long = nativeDecoderNew(channels)
-    fun decode(handle: Long, packet: ByteArray?, out: ShortArray): Int = nativeDecode(handle, packet, out)
+    fun decode(handle: Long, packet: ByteArray?, out: ShortArray, fec: Boolean = false): Int = nativeDecode(handle, packet, out, fec)
     fun decoderDestroy(handle: Long) = nativeDecoderDestroy(handle)
 
     @JvmStatic private external fun nativeEncoderNew(channels: Int, bitrate: Int): Long
     @JvmStatic private external fun nativeEncode(handle: Long, pcm: ShortArray): ByteArray?
     @JvmStatic private external fun nativeEncoderDestroy(handle: Long)
     @JvmStatic private external fun nativeDecoderNew(channels: Int): Long
-    @JvmStatic private external fun nativeDecode(handle: Long, packet: ByteArray?, out: ShortArray): Int
+    @JvmStatic private external fun nativeDecode(handle: Long, packet: ByteArray?, out: ShortArray, fec: Boolean): Int
     @JvmStatic private external fun nativeDecoderDestroy(handle: Long)
 }

@@ -125,40 +125,59 @@ object SelfTest {
 
     /**
      * Debug builds only (`--ez com.wristcord.ENGINETEST true`): the real call audio engine on the
-     * connected headset, without Discord. A soft 2 s tone goes through the same decode-and-mix
-     * path as a speaker in a call, and the mic is measured while it plays.
+     * connected headset, without Discord, under a call's worst conditions. A soft 3 s tone
+     * arrives like Wi-Fi in power save delivers it: bunches of 5 packets every 100 ms, shuffled,
+     * 2% lost. Meanwhile another thread does what you talking costs (encode and encrypt 50
+     * frames a second). It must still play smoothly: the log shows gaps and underruns.
      */
     fun engine(ctx: Context) {
         val headset = Headset.current(ctx) ?: run { Log.i(TAG, "engine: no headset"); return }
-        // The tone is encoded before the engine starts, so only the engine's own codecs run.
         val packets = ArrayList<ByteArray>()
         OpusEncoder(channels = 1).use { enc ->
             var phase = 0.0
-            repeat(100) {
+            repeat(150) {
                 val frame = ByteBuffer.allocate(OpusEncoder.FRAME_SAMPLES * 2).order(ByteOrder.LITTLE_ENDIAN)
                 repeat(OpusEncoder.FRAME_SAMPLES) {
                     frame.putShort((sin(phase) * 3000).toInt().toShort())
                     phase += 2 * PI * 440 / OpusEncoder.SAMPLE_RATE
                 }
                 packets += enc.encode(frame.array())
-                Thread.sleep(OpusEncoder.FRAME_US / 1000)
             }
         }
-        val engine = AudioEngine(ctx, onFrame = {}, onQuiet = {})
+        val engine = AudioEngine(ctx, onFrame = { _, _ -> }, onQuiet = {})
+        val loading = java.util.concurrent.atomic.AtomicBoolean(true)
+        val load = Thread {
+            val enc = OpusEncoder()
+            val aes = com.wristcord.discord.voice.AesGcmTransport(ByteArray(32) { it.toByte() })
+            val pcm = ByteArray(OpusEncoder.FRAME_SAMPLES * 2) { (it * 31).toByte() }
+            var n = 0L
+            while (loading.get()) {
+                for (p in enc.encode(pcm)) aes.seal(ByteArray(12).also { it[0] = (n++).toByte() }, ByteArray(12), p)
+                Thread.sleep(OpusEncoder.FRAME_US / 1000)
+            }
+            enc.close()
+        }
         try {
             kotlinx.coroutines.runBlocking { engine.start(headset) }
             Log.i(TAG, "engine: path=${engine.path?.label} headset=${Headset.name(headset)}, ${packets.size} packets")
-            packets.forEachIndexed { seq, p ->
-                engine.onRemote(1234, seq, p)
-                Thread.sleep(OpusEncoder.FRAME_US / 1000)
+            load.start()
+            val random = java.util.Random(7)
+            var seq = 0
+            for (burst in packets.chunked(5)) {
+                val numbered = burst.mapIndexed { i, p -> (seq + i) to p }.shuffled(random)
+                seq += burst.size
+                for ((n, p) in numbered) if (random.nextDouble() >= 0.02) engine.onRemote(1234, n and 0xFFFF, p)
+                Thread.sleep(100)
             }
-            Thread.sleep(500)
+            Thread.sleep(600)
             val s = engine.stats()
             Log.i(TAG, "engine: $s")
-            Log.i(TAG, if (s.played > 50 && s.routeOk && s.captured > 50) "engine PASS" else "engine FAIL")
+            val ok = s.played > 120 && s.routeOk && s.outputUnderruns == 0
+            Log.i(TAG, if (ok) "engine PASS" else "engine FAIL")
         } catch (t: Throwable) {
             Log.e(TAG, "engine FAIL", t)
         } finally {
+            loading.set(false)
             engine.stop()
         }
     }

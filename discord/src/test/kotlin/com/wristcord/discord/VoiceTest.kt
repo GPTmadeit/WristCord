@@ -49,11 +49,32 @@ class RtpTest {
         val c = AesGcmTransport(key)
         val p = RtpSender(ssrc = 0x01020304, cipher = c).packet(byteArrayOf(1, 2, 3))
         assertEquals(0x80.toByte(), p[0])
-        assertEquals(0x78.toByte(), p[1])
+        assertEquals("first packet: marker bit + payload type 0x78", 0xF8.toByte(), p[1])
         assertEquals(12 + 3 + 16 + 4, p.size) // header + ciphertext + tag + nonce
         val r = RtpReceiver.open(p, c)!!
         assertEquals(0x01020304, r.ssrc)
         assertArrayEquals(byteArrayOf(1, 2, 3), r.payload)
+    }
+
+    @Test
+    fun `timestamps follow capture time across pauses, marker starts each talkspurt`() {
+        val c = AesGcmTransport(key)
+        val s = RtpSender(ssrc = 9, cipher = c)
+        fun ts(p: ByteArray) = ByteBuffer.wrap(p, 4, 4).int.toLong() and 0xFFFFFFFFL
+        fun seq(p: ByteArray) = ByteBuffer.wrap(p, 2, 2).short.toInt() and 0xFFFF
+        val a = s.packet(byteArrayOf(1), frame = 10)
+        val b = s.packet(byteArrayOf(2), frame = 11)
+        val silence = s.packet(OPUS_SILENCE) // straight after: frame 12
+        val after = s.packet(byteArrayOf(3), frame = 110) // two seconds later
+        assertEquals(960L, (ts(b) - ts(a)) and 0xFFFFFFFFL)
+        assertEquals(960L, (ts(silence) - ts(b)) and 0xFFFFFFFFL)
+        assertEquals(98L * 960, (ts(after) - ts(silence)) and 0xFFFFFFFFL)
+        assertEquals(0x78.toByte(), b[1]) // no marker mid-sentence
+        assertEquals(0xF8.toByte(), after[1]) // marker after the pause
+        assertEquals(1, (seq(after) - seq(silence)) and 0xFFFF) // sequence never skips
+        // Speech resuming within the silence frames' timestamps still moves forward.
+        val early = s.packet(byteArrayOf(4), frame = 105)
+        assertEquals(960L, (ts(early) - ts(after)) and 0xFFFFFFFFL)
     }
 
     @Test

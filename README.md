@@ -89,6 +89,14 @@ the **watch's mic**, and the voice channel screen says so. LE Audio headsets, or
 connected to a phone, keep the headset's mic. [docs/wear-audio.md](docs/wear-audio.md) has the
 log lines.
 
+**Playout.** Each speaker gets a jitter buffer:
+- It reorders packets and starts at 60 ms of delay, growing only when the network runs it dry.
+- A single lost packet is rebuilt from Opus's error correction; other gaps are concealed.
+- Decoding happens on the audio thread, so your own talking can't starve it.
+
+During a call the watch also holds a low-latency Wi-Fi lock, because power-saving Wi-Fi delivers
+packets in bunches.
+
 **Joining** works like Discord's own apps. The watch's session asks Discord's gateway to join
 (op 4) and gets a voice server back. It then connects to that server itself: WebSocket
 signalling, UDP media, and Opus audio through **libopus**, compiled into the app. (Android's
@@ -307,7 +315,7 @@ adb connect 192.168.1.50:5555
 ```
 
 ```bash
-adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.4.apk
+adb -s 192.168.1.50:5555 install -r WristCord-watch-v2.0.0-beta.5.apk
 ```
 
 If `install` fails with `INSTALL_FAILED_UPDATE_INCOMPATIBLE`, a WristCord signed with a different
@@ -332,7 +340,8 @@ discord/                   :discord - the Discord client, plain JVM
   proto/                   ProtoReader/Writer, UserSettings, Frecency
   state/                   DiscordState, Snapshot, MessageStore, Permissions
   markdown/                Discord markup -> Block/Inline tree
-  voice/                   VoiceConnection (voice gateway v8, UDP, RTP, DAVE flow), VoiceProtocol
+  voice/                   VoiceConnection (voice gateway v8, UDP, RTP, DAVE flow), VoiceProtocol,
+                           JitterBuffer (per-speaker playout: reorder, adapt, FEC, concealment)
 native/dave/               Rust JNI library: DAVE through davey, libopus (src/opus.rs), the
                            XChaCha20-Poly1305 transport; src/testing.rs plays the voice
                            server's MLS side for tests only
