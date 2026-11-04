@@ -157,8 +157,11 @@ fun OnboardingScreen(updates: UpdateController) {
         ) {
             BrandHeader()
             Text(
-                "Phone side. Controls Discord only through its own notification actions and its " +
-                    "own on-screen buttons - no Discord API, no token, no third-party client.",
+                "The voice bridge. Since 2.0 the watch signs in to Discord itself and reads your " +
+                    "real voice state; this app is what presses mute, deafen, output and leave on " +
+                    "the phone's own Discord call - through Discord's notification actions and " +
+                    "on-screen buttons, because Discord's servers do not let one device mute " +
+                    "another. It holds no token and never talks to Discord itself.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )

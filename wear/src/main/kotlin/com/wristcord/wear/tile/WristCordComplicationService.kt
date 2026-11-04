@@ -18,6 +18,7 @@ import com.wristcord.R
 import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
 import com.wristcord.wear.MainActivity
+import com.wristcord.wear.discord.Voice
 import com.wristcord.wear.link.StateStore
 
 /**
@@ -29,7 +30,8 @@ import com.wristcord.wear.link.StateStore
 class WristCordComplicationService : SuspendingComplicationDataSourceService() {
 
     override suspend fun onComplicationRequest(request: ComplicationRequest): ComplicationData? {
-        val state = StateStore.readSync(this)
+        // Discord's own mute state when the gateway has reported it recently, else the phone's.
+        val state = Voice.mergedSync(this, StateStore.readSync(this))
         return build(request.complicationType, state)
     }
 
@@ -88,7 +90,9 @@ class WristCordComplicationService : SuspendingComplicationDataSourceService() {
     private fun openApp(): PendingIntent = PendingIntent.getActivity(
         this,
         0,
-        Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(MainActivity.EXTRA_OPEN_REMOTE, true),
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 

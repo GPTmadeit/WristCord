@@ -29,7 +29,7 @@ import androidx.wear.compose.material3.MaterialTheme
 import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.Text
 import com.wristcord.R
-import com.wristcord.shared.Brand
+import com.wristcord.wear.ui.theme.discord
 import com.wristcord.shared.Updater
 
 /**
@@ -63,14 +63,14 @@ fun UpdateScreen(
             Icon(
                 painter = painterResource(R.drawable.ic_download),
                 contentDescription = null,
-                tint = Color(Brand.BLUE),
+                tint = discord.iconBrand,
                 modifier = Modifier.size(28.dp),
             )
 
             Text(
                 "Installed: $currentVersion",
                 style = MaterialTheme.typography.labelSmall,
-                color = Color(Brand.ON_SURFACE_VARIANT),
+                color = discord.textMuted,
                 textAlign = TextAlign.Center,
             )
 
@@ -92,7 +92,7 @@ fun UpdateScreen(
                     Text(
                         status.release.assetName,
                         style = MaterialTheme.typography.labelSmall,
-                        color = Color(Brand.OUTLINE),
+                        color = discord.iconMuted,
                         textAlign = TextAlign.Center,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
@@ -144,7 +144,7 @@ private fun Body(text: String) {
     Text(
         text,
         style = MaterialTheme.typography.bodySmall,
-        color = Color(Brand.ON_SURFACE),
+        color = discord.textDefault,
         textAlign = TextAlign.Center,
     )
 }

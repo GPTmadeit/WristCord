@@ -41,8 +41,29 @@ object Commands {
         scope.launch {
             when (val result = PhoneLink(app).send(path, payload)) {
                 is PhoneLink.Result.Sent -> if (!quiet) watchdog(app, path)
-                is PhoneLink.Result.Failed -> {
+                // A background refresh that cannot reach the phone is not something the user
+                // did; it surfaces the next time they press a button, not before.
+                is PhoneLink.Result.Failed -> if (!quiet) {
                     StateStore.setError(app, result.message)
+                    requestTileUpdate(app)
+                }
+            }
+        }
+    }
+
+    /**
+     * Like [fire], but when the phone cannot be reached at all, try [fallback] (e.g. leaving
+     * the call through Discord's gateway) before reporting the failure.
+     */
+    fun fireOrElse(ctx: Context, path: String, fallback: () -> Boolean) {
+        val app = ctx.applicationContext
+        StateStore.setPending(path)
+        scope.launch {
+            when (val result = PhoneLink(app).send(path)) {
+                is PhoneLink.Result.Sent -> watchdog(app, path)
+                is PhoneLink.Result.Failed -> {
+                    if (fallback()) StateStore.clearError(app) else StateStore.setError(app, result.message)
+                    StateStore.setPending(null)
                     requestTileUpdate(app)
                 }
             }

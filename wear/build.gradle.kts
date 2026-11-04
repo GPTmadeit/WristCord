@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.kotlin.serialization)
 }
 
 android {
@@ -12,8 +13,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkWear.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 5
-        versionName = "1.3.0"
+        versionCode = 6
+        versionName = "2.0.0-beta.1"
 
         // No Wear OS watch is x86; shipping those slices only inflates the download the
         // watch has to pull over Wi-Fi when it updates itself.
@@ -64,6 +65,10 @@ android {
         buildConfig = true
     }
 
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
@@ -74,7 +79,16 @@ android {
     }
 }
 
+composeCompiler {
+    // The Discord models (:discord) and the shared wire types are immutable data; telling the
+    // Compose compiler so keeps a message arriving from recomposing every row on screen.
+    stabilityConfigurationFiles.add(rootProject.layout.projectDirectory.file("compose-stability.conf"))
+}
+
 dependencies {
+    // The Discord client itself: gateway, REST, QR login, settings proto, live state.
+    implementation(project(":discord"))
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.activity.compose)
@@ -104,4 +118,17 @@ dependencies {
     implementation(libs.play.services.wearable)
     implementation(libs.coroutines.android)
     implementation(libs.coroutines.play.services)
+
+    implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.compose.material.icons.extended)
+    // Avatars, server icons, custom emoji and attachments, through the client's own OkHttp.
+    implementation(libs.coil.compose)
+    implementation(libs.coil.network.okhttp)
+    implementation(libs.coil.gif)
+    // The QR code Discord's phone app scans to sign the watch in.
+    implementation(libs.zxing.core)
+    // Voice / keyboard / emoji input for replies.
+    implementation(libs.wear.input)
+
+    testImplementation(libs.junit)
 }

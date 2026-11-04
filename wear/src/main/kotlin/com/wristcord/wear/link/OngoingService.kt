@@ -17,11 +17,14 @@ import com.wristcord.R
 import com.wristcord.shared.Toggle
 import com.wristcord.shared.VoiceState
 import com.wristcord.wear.MainActivity
+import com.wristcord.wear.WristCordApp
+import com.wristcord.wear.discord.Voice
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
 
 /**
@@ -30,7 +33,8 @@ import kotlinx.coroutines.launch
  * tap from the watch face lands you back on the remote with the call still up.
  *
  * Optional, and it stops itself the moment the call ends, so nothing is running when there is
- * nothing to control.
+ * nothing to control. While it runs it also holds the Discord gateway open, so the chip, tile
+ * and complication show Discord's own mute state live for the length of the call.
  *
  * Uses the `specialUse` foreground service type rather than `connectedDevice`: since API 34 the
  * latter is only permitted when a Bluetooth runtime permission is *granted*, and WristCord holds
@@ -47,16 +51,21 @@ class OngoingService : Service() {
     override fun onCreate() {
         super.onCreate()
         StateStore.load(this)
+        Voice.load(this)
         createChannel()
+        val account = WristCordApp.of(this).account
 
         // A refused foreground start must not take the watch app down with it.
-        if (!pushNotification(StateStore.state.value)) {
+        if (!pushNotification(Voice.merge(Voice.gateway.value, StateStore.state.value, account.signedIn.value))) {
             stopSelf()
             return
         }
+        if (account.signedIn.value) account.acquire(HOLD)
 
         scope.launch {
-            StateStore.state.collectLatest { state ->
+            combine(StateStore.state, Voice.gateway, account.signedIn) { phone, gateway, signedIn ->
+                Voice.merge(gateway, phone, signedIn)
+            }.collectLatest { state ->
                 if (!state.inCall || !isEnabled(this@OngoingService)) {
                     stopSelf()
                     return@collectLatest
@@ -70,6 +79,7 @@ class OngoingService : Service() {
 
     override fun onDestroy() {
         scope.cancel()
+        WristCordApp.of(this).account.release(HOLD)
         super.onDestroy()
     }
 
@@ -78,7 +88,9 @@ class OngoingService : Service() {
         val open = PendingIntent.getActivity(
             this,
             0,
-            Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+            Intent(this, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                .putExtra(MainActivity.EXTRA_OPEN_REMOTE, true),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
@@ -141,6 +153,7 @@ class OngoingService : Service() {
 
     companion object {
         private const val TAG = "WristCord/Ongoing"
+        private const val HOLD = "call"
         private const val CHANNEL_ID = "wristcord_ongoing"
         private const val NOTIFICATION_ID = 8123
         private const val PREFS = "wristcord_ongoing"
@@ -156,6 +169,11 @@ class OngoingService : Service() {
         /** Called whenever new state lands: start while in a call, stop the moment it ends. */
         fun syncWith(ctx: Context, state: VoiceState) {
             if (state.inCall && isEnabled(ctx)) start(ctx) else stop(ctx)
+        }
+
+        /** Discord's gateway saw this account join or leave voice. */
+        fun onCallStateChanged(ctx: Context, inCall: Boolean) {
+            if (inCall && isEnabled(ctx)) start(ctx) else if (!inCall) stop(ctx)
         }
 
         private fun start(ctx: Context) {

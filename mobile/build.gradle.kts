@@ -14,8 +14,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkMobile.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 5
-        versionName = "1.3.0"
+        versionCode = 6
+        versionName = "2.0.0-beta.1"
     }
 
     signingConfigs {

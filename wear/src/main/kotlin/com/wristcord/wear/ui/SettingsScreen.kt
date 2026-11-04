@@ -1,320 +1,404 @@
 package com.wristcord.wear.ui
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.aspectRatio
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.offset
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Check
+import androidx.compose.material.icons.rounded.Close
+import androidx.compose.material.icons.rounded.Download
+import androidx.compose.material.icons.rounded.EditNote
+import androidx.compose.material.icons.rounded.GridView
+import androidx.compose.material.icons.rounded.Logout
+import androidx.compose.material.icons.rounded.Palette
+import androidx.compose.material.icons.rounded.Watch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.wear.compose.material3.AlertDialog
+import androidx.wear.compose.material3.AlertDialogDefaults
 import androidx.wear.compose.material3.Button
 import androidx.wear.compose.material3.ButtonDefaults
 import androidx.wear.compose.material3.Icon
 import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
+import androidx.wear.compose.material3.RadioButton
+import androidx.wear.compose.material3.SwitchButton
 import androidx.wear.compose.material3.Text
+import android.app.RemoteInput
+import com.wristcord.BuildConfig
 import com.wristcord.R
-import com.wristcord.shared.Brand
+import com.wristcord.discord.Cdn
+import com.wristcord.discord.proto.Theme
+import com.wristcord.discord.state.Snapshot
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
+import com.wristcord.wear.WristCordApp
+import com.wristcord.wear.discord.ThemePrefs
+import com.wristcord.wear.ui.components.Avatar
+import com.wristcord.wear.ui.components.Caption
+import com.wristcord.wear.ui.components.ListScreen
+import com.wristcord.wear.ui.components.RowIconSize
+import com.wristcord.wear.ui.components.row
+import com.wristcord.wear.ui.components.statusColor
+import com.wristcord.wear.ui.components.statusLabel
+import com.wristcord.wear.ui.theme.discord
+import kotlinx.coroutines.launch
 
-/**
- * Slot editing, borrowed wholesale from the watch-face complication editor: you get a live
- * miniature of the thing you are editing, each position is a tappable target with a dashed
- * outline, and picking one drops you into a list of what can go there.
- */
 @Composable
 fun SettingsScreen(
-    assignments: Map<Slot, RemoteAction>,
+    snapshot: Snapshot,
+    signedIn: Boolean,
     updateSummary: String,
     ongoingEnabled: Boolean,
     onToggleOngoing: (Boolean) -> Unit,
-    onEditSlot: (Slot) -> Unit,
-    onReset: () -> Unit,
+    onOpenStatus: () -> Unit,
+    onOpenTheme: () -> Unit,
+    onOpenButtons: () -> Unit,
     onOpenUpdates: () -> Unit,
+    onSignOut: () -> Unit,
 ) {
-    val scroll = rememberScrollState()
+    val c = discord
     var ongoing by remember(ongoingEnabled) { mutableStateOf(ongoingEnabled) }
+    var confirmSignOut by remember { mutableStateOf(false) }
+    val theme by ThemePrefs.resolved.collectAsStateWithLifecycle()
 
-    ScreenScaffold(scrollState = scroll) { contentPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scroll)
-                .padding(contentPadding)
-                .padding(horizontal = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            ListHeader { Text("Buttons") }
-
-            Text(
-                "Tap a position to change what it does.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(Brand.ON_SURFACE_VARIANT),
-                textAlign = TextAlign.Center,
-            )
-
-            SlotEditorPreview(assignments = assignments, onEditSlot = onEditSlot)
-
-            Slot.entries.forEach { slot ->
-                val action = assignments[slot] ?: slot.default
+    ListScreen { spec ->
+        row(spec, "h") { ListHeader(modifier = modifier) { Text("Settings") } }
+        val me = snapshot.me
+        if (signedIn && me != null) {
+            row(spec, "account") {
+                val status = snapshot.settings.status.ifBlank { "online" }
                 Button(
-                    onClick = { onEditSlot(slot) },
-                    modifier = Modifier.fillMaxWidth(),
+                    onClick = onOpenStatus,
+                    modifier = modifier,
+                    transformation = transformation,
                     colors = ButtonDefaults.filledTonalButtonColors(),
-                    icon = {
-                        Icon(
-                            painter = painterResource(action.icon(engaged = false)),
-                            contentDescription = null,
-                            tint = action.color,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    },
-                    secondaryLabel = { Text(action.label) },
-                    label = { Text(slot.label) },
+                    icon = { Avatar(Cdn.avatar(me, 64), me.displayName, RowIconSize, status = status) },
+                    label = { Text(me.displayName, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                    secondaryLabel = { Text(statusLabel(status), maxLines = 1) },
                 )
             }
-
+        }
+        row(spec, "theme") {
             Button(
-                onClick = onReset,
-                modifier = Modifier.fillMaxWidth(),
+                onClick = onOpenTheme,
+                modifier = modifier,
+                transformation = transformation,
                 colors = ButtonDefaults.filledTonalButtonColors(),
-                label = { Text("Reset layout") },
+                icon = { Icon(Icons.Rounded.Palette, contentDescription = null, tint = c.iconBrand) },
+                label = { Text("Theme") },
+                secondaryLabel = { Text(themeSummary(theme), maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
+        }
 
-            ListHeader { Text("On the watch face") }
-
+        row(spec, "remote") { ListHeader(modifier = modifier) { Text("Voice remote") } }
+        row(spec, "buttons") {
             Button(
-                onClick = {
-                    ongoing = !ongoing
-                    onToggleOngoing(ongoing)
+                onClick = onOpenButtons,
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(Icons.Rounded.GridView, contentDescription = null, tint = c.iconDefault) },
+                label = { Text("Buttons") },
+                secondaryLabel = { Text("Choose what goes where") },
+            )
+        }
+        row(spec, "chip") {
+            SwitchButton(
+                checked = ongoing,
+                onCheckedChange = {
+                    ongoing = it
+                    onToggleOngoing(it)
                 },
-                modifier = Modifier.fillMaxWidth(),
-                colors = if (ongoing) {
-                    ButtonDefaults.buttonColors()
-                } else {
-                    ButtonDefaults.filledTonalButtonColors()
-                },
-                icon = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_tile),
-                        contentDescription = null,
-                        tint = if (ongoing) Color(Brand.INK) else Color(Brand.BLUE),
-                        modifier = Modifier.size(20.dp),
-                    )
-                },
-                secondaryLabel = { Text(if (ongoing) "Shown during calls" else "Off") },
+                modifier = modifier,
+                transformation = transformation,
+                icon = { Icon(Icons.Rounded.Watch, contentDescription = null) },
                 label = { Text("Watch face chip") },
+                secondaryLabel = { Text(if (ongoing) "Shown during calls" else "Off") },
             )
+        }
+        row(spec, "bridge") {
+            Caption("Mute, deafen and output act on the phone's Discord through WristCord on the phone - Discord's servers do not let one device mute another.", modifier)
+        }
 
-            Text(
-                "A complication is available too - add it from your watch face's own editor.",
-                style = MaterialTheme.typography.labelSmall,
-                color = Color(Brand.ON_SURFACE_VARIANT),
-                textAlign = TextAlign.Center,
-            )
-
-            ListHeader { Text("App") }
-
+        row(spec, "app") { ListHeader(modifier = modifier) { Text("App") } }
+        row(spec, "updates") {
             Button(
                 onClick = onOpenUpdates,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = modifier,
+                transformation = transformation,
                 colors = ButtonDefaults.filledTonalButtonColors(),
-                icon = {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_download),
-                        contentDescription = null,
-                        tint = Color(Brand.BLUE),
-                        modifier = Modifier.size(20.dp),
-                    )
-                },
-                secondaryLabel = { Text(updateSummary) },
+                icon = { Icon(Icons.Rounded.Download, contentDescription = null, tint = c.iconDefault) },
                 label = { Text("Updates") },
+                secondaryLabel = { Text(updateSummary, maxLines = 2, overflow = TextOverflow.Ellipsis) },
+            )
+        }
+        if (signedIn) row(spec, "signout") {
+            Button(
+                onClick = { confirmSignOut = true },
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(contentColor = c.textCritical, iconColor = c.iconCritical),
+                icon = { Icon(Icons.Rounded.Logout, contentDescription = null) },
+                label = { Text("Sign out") },
+            )
+        }
+        row(spec, "about") {
+            Caption("WristCord ${BuildConfig.VERSION_NAME}\nUnofficial · not made by or affiliated with Discord", modifier)
+        }
+    }
+
+    AlertDialog(
+        visible = confirmSignOut,
+        onDismissRequest = { confirmSignOut = false },
+        title = { Text("Sign out?", textAlign = TextAlign.Center) },
+        text = { Text("This ends the watch's Discord session everywhere.", textAlign = TextAlign.Center) },
+        confirmButton = {
+            AlertDialogDefaults.ConfirmButton(onClick = {
+                confirmSignOut = false
+                onSignOut()
+            })
+        },
+        dismissButton = { AlertDialogDefaults.DismissButton(onClick = { confirmSignOut = false }) },
+    )
+}
+
+private fun themeSummary(r: ThemePrefs.Resolved): String = when (r.choice) {
+    ThemePrefs.Choice.FOLLOW -> "Match Discord · ${themeName(r.theme)}" + if (r.gradient != null) " + Nitro" else ""
+    else -> r.choice.label
+}
+
+fun themeName(t: Theme) = when (t) {
+    Theme.DARK -> "Dark"
+    Theme.ASH -> "Ash"
+    Theme.ONYX -> "Onyx"
+    Theme.LIGHT -> "Light"
+}
+
+/**
+ * Online status, set the way Discord's own apps set it - through the account's settings, so
+ * it changes on your phone and desktop too.
+ */
+@Composable
+fun StatusScreen(snapshot: Snapshot, onDone: () -> Unit) {
+    val ctx = LocalContext.current
+    val client = WristCordApp.of(ctx).discord
+    val scope = rememberCoroutineScope()
+    val current = snapshot.settings.status.ifBlank { "online" }
+    val custom = snapshot.settings.customStatus?.takeIf { it.isActive() }
+    var failed by remember { mutableStateOf(false) }
+    val input = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val text = result.data?.let { RemoteInput.getResultsFromIntent(it)?.getCharSequence(KEY_REPLY) }?.toString()
+        if (!text.isNullOrBlank()) scope.launch { failed = !client.setCustomStatus(text.take(128)) }
+    }
+
+    ListScreen { spec ->
+        row(spec, "h") { ListHeader(modifier = modifier) { Text("Status") } }
+        for (s in listOf("online", "idle", "dnd", "invisible")) row(spec, s) {
+            RadioButton(
+                selected = current == s,
+                onSelect = {
+                    scope.launch {
+                        failed = !client.setStatus(s)
+                        if (!failed) onDone()
+                    }
+                },
+                modifier = modifier,
+                transformation = transformation,
+                icon = { Box(Modifier.size(12.dp).clip(CircleShape).background(statusColor(s))) },
+                label = { Text(statusLabel(s)) },
+            )
+        }
+        if (failed) row(spec, "err") { Caption("Discord did not accept that - try again", modifier, color = discord.textCritical) }
+        row(spec, "custom") {
+            Button(
+                onClick = { runCatching { input.launch(replyIntent("Custom status")) } },
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(Icons.Rounded.EditNote, contentDescription = null) },
+                label = { Text("Custom status") },
+                secondaryLabel = { Text(custom?.let { listOf(it.emojiName, it.text).filter(String::isNotBlank).joinToString(" ") } ?: "Not set", maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+        }
+        if (custom != null) row(spec, "clear") {
+            Button(
+                onClick = { scope.launch { failed = !client.setCustomStatus("") } },
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(Icons.Rounded.Close, contentDescription = null) },
+                label = { Text("Clear custom status") },
             )
         }
     }
 }
 
+/** Discord's themes, plus following the account so the watch changes when the phone does. */
+@Composable
+fun ThemeScreen() {
+    val ctx = LocalContext.current
+    val r by ThemePrefs.resolved.collectAsStateWithLifecycle()
+    val accountTheme = remember(r) { ThemePrefs.accountTheme(ctx) }
+    val accountGradient = remember(r) { ThemePrefs.accountGradient(ctx) }
+    ListScreen { spec ->
+        row(spec, "h") { ListHeader(modifier = modifier) { Text("Theme") } }
+        for (choice in ThemePrefs.Choice.entries) row(spec, choice.name) {
+            RadioButton(
+                selected = r.choice == choice,
+                onSelect = { ThemePrefs.setChoice(ctx, choice) },
+                modifier = modifier,
+                transformation = transformation,
+                label = { Text(choice.label) },
+                secondaryLabel = if (choice == ThemePrefs.Choice.FOLLOW) { { Text("Now ${themeName(accountTheme)}") } } else null,
+            )
+        }
+        row(spec, "nitro") {
+            SwitchButton(
+                checked = r.gradients,
+                onCheckedChange = { ThemePrefs.setGradients(ctx, it) },
+                enabled = r.choice == ThemePrefs.Choice.FOLLOW,
+                modifier = modifier,
+                transformation = transformation,
+                label = { Text("Nitro gradient") },
+                secondaryLabel = { Text(if (accountGradient != null) "From your account" else "When your account uses one") },
+            )
+        }
+        row(spec, "note") { Caption("Colours come straight from Discord's own theme tokens.", modifier) }
+    }
+}
+
 /**
- * A non-functional miniature of the remote. Every position is outlined the way an empty
- * complication slot is, so it reads as "these are the things you can change".
+ * Slot editing, borrowed from the watch-face complication editor: a live miniature of the
+ * remote with every position outlined, and a list of what can go in each.
  */
 @Composable
-private fun SlotEditorPreview(
+fun ButtonsScreen(
     assignments: Map<Slot, RemoteAction>,
     onEditSlot: (Slot) -> Unit,
+    onReset: () -> Unit,
 ) {
+    val c = discord
+    ListScreen { spec ->
+        row(spec, "h") { ListHeader(modifier = modifier) { Text("Buttons") } }
+        row(spec, "hint") { Caption("Tap a position to change what it does.", modifier) }
+        row(spec, "preview") { SlotEditorPreview(assignments, onEditSlot, modifier) }
+        for (slot in Slot.entries) row(spec, slot.id) {
+            val action = assignments[slot] ?: slot.default
+            Button(
+                onClick = { onEditSlot(slot) },
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(painterResource(action.icon(engaged = false)), contentDescription = null, tint = c.iconStrong, modifier = Modifier.size(20.dp)) },
+                secondaryLabel = { Text(action.label) },
+                label = { Text(slot.label) },
+            )
+        }
+        row(spec, "reset") {
+            Button(
+                onClick = onReset,
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                label = { Text("Reset layout") },
+            )
+        }
+    }
+}
+
+@Composable
+private fun SlotEditorPreview(assignments: Map<Slot, RemoteAction>, onEditSlot: (Slot) -> Unit, modifier: Modifier) {
+    val c = discord
     BoxWithConstraints(
-        modifier = Modifier
+        modifier = modifier
             .fillMaxWidth(0.86f)
             .aspectRatio(1f)
             .clip(CircleShape)
-            .background(Color.Black, CircleShape)
-            .border(1.dp, Color(0xFF3C4043), CircleShape),
+            .background(c.baseLowest, CircleShape)
+            .border(1.dp, c.borderNormal, CircleShape),
     ) {
         val size: Dp = if (maxWidth < maxHeight) maxWidth else maxHeight
-
-        SlotTarget(
-            action = assignments[Slot.LEFT] ?: Slot.LEFT.default,
-            diameter = size * 0.215f,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(x = size * -0.315f, y = size * -0.02f),
-            onClick = { onEditSlot(Slot.LEFT) },
-        )
-        SlotTarget(
-            action = assignments[Slot.CENTRE] ?: Slot.CENTRE.default,
-            diameter = size * 0.36f,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(y = size * -0.02f),
-            onClick = { onEditSlot(Slot.CENTRE) },
-        )
-        SlotTarget(
-            action = assignments[Slot.RIGHT] ?: Slot.RIGHT.default,
-            diameter = size * 0.215f,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(x = size * 0.315f, y = size * -0.02f),
-            onClick = { onEditSlot(Slot.RIGHT) },
-        )
-        SlotTarget(
-            action = assignments[Slot.BOTTOM] ?: Slot.BOTTOM.default,
-            diameter = size * 0.20f,
-            modifier = Modifier
-                .align(Alignment.Center)
-                .offset(x = size * -0.085f, y = size * 0.345f),
-            onClick = { onEditSlot(Slot.BOTTOM) },
-        )
-
-        // The fixed gear, shown greyed so it is obvious it is not up for grabs.
+        SlotTarget(assignments[Slot.LEFT] ?: Slot.LEFT.default, size * 0.215f,
+            Modifier.align(Alignment.Center).offset(x = size * -0.315f, y = size * -0.02f)) { onEditSlot(Slot.LEFT) }
+        SlotTarget(assignments[Slot.CENTRE] ?: Slot.CENTRE.default, size * 0.36f,
+            Modifier.align(Alignment.Center).offset(y = size * -0.02f)) { onEditSlot(Slot.CENTRE) }
+        SlotTarget(assignments[Slot.RIGHT] ?: Slot.RIGHT.default, size * 0.215f,
+            Modifier.align(Alignment.Center).offset(x = size * 0.315f, y = size * -0.02f)) { onEditSlot(Slot.RIGHT) }
+        SlotTarget(assignments[Slot.BOTTOM] ?: Slot.BOTTOM.default, size * 0.20f,
+            Modifier.align(Alignment.Center).offset(x = size * -0.085f, y = size * 0.345f)) { onEditSlot(Slot.BOTTOM) }
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
                 .offset(x = size * 0.145f, y = size * 0.345f)
                 .size(size * 0.145f)
                 .clip(CircleShape)
-                .background(Color(0xFF16171A), CircleShape),
+                .background(c.surfaceHigh, CircleShape),
             contentAlignment = Alignment.Center,
         ) {
-            Icon(
-                painter = painterResource(R.drawable.ic_settings),
-                contentDescription = null,
-                tint = Color(Brand.OUTLINE),
-                modifier = Modifier.size(size * 0.07f),
-            )
+            Icon(painterResource(R.drawable.ic_settings), contentDescription = null, tint = c.iconMuted, modifier = Modifier.size(size * 0.07f))
         }
     }
 }
 
 @Composable
-private fun SlotTarget(
-    action: RemoteAction,
-    diameter: Dp,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit,
-) {
+private fun SlotTarget(action: RemoteAction, diameter: Dp, modifier: Modifier = Modifier, onClick: () -> Unit) {
+    val colors = remoteColors(action, engaged = false)
     Box(
         modifier = modifier
             .size(diameter)
             .clip(CircleShape)
-            .background(
-                if (action == RemoteAction.NONE) Color.Transparent else Color(Brand.SURFACE_HIGH),
-                CircleShape,
-            )
-            .border(1.dp, action.color.copy(alpha = 0.9f), CircleShape)
+            .background(colors.fill, CircleShape)
+            .border(1.dp, colors.accent.copy(alpha = 0.9f), CircleShape)
             .clickable(onClick = onClick),
         contentAlignment = Alignment.Center,
     ) {
-        Icon(
-            painter = painterResource(action.icon(engaged = false)),
-            contentDescription = action.label,
-            tint = action.color,
-            modifier = Modifier.size(diameter * 0.42f),
-        )
+        Icon(painterResource(action.icon(engaged = false)), contentDescription = action.label, tint = colors.tint, modifier = Modifier.size(diameter * 0.42f))
     }
 }
 
 /** The "what can go here" list, reached by tapping a position. */
 @Composable
-fun SlotPickerScreen(
-    slot: Slot,
-    current: RemoteAction,
-    onChoose: (RemoteAction) -> Unit,
-) {
-    val scroll = rememberScrollState()
-
-    ScreenScaffold(scrollState = scroll) { contentPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(scroll)
-                .padding(contentPadding)
-                .padding(horizontal = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            ListHeader { Text(slot.label) }
-
-            RemoteAction.entries.forEach { action ->
-                val selected = action == current
-                Button(
-                    onClick = { onChoose(action) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = if (selected) {
-                        ButtonDefaults.buttonColors(
-                            containerColor = action.dimColor,
-                            contentColor = Color(Brand.ON_SURFACE),
-                            secondaryContentColor = Color(Brand.ON_SURFACE_VARIANT),
-                        )
-                    } else {
-                        ButtonDefaults.filledTonalButtonColors()
-                    },
-                    icon = {
-                        Icon(
-                            painter = painterResource(
-                                if (selected) R.drawable.ic_check else action.icon(engaged = false)
-                            ),
-                            contentDescription = null,
-                            tint = action.color,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    },
-                    secondaryLabel = {
-                        Text(
-                            action.description,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    },
-                    label = { Text(action.label) },
-                )
-            }
+fun SlotPickerScreen(slot: Slot, current: RemoteAction, onChoose: (RemoteAction) -> Unit) {
+    val c = discord
+    ListScreen { spec ->
+        row(spec, "h") { ListHeader(modifier = modifier) { Text(slot.label) } }
+        for (action in RemoteAction.entries) row(spec, action.id) {
+            val selected = action == current
+            Button(
+                onClick = { onChoose(action) },
+                modifier = modifier,
+                transformation = transformation,
+                colors = if (selected) ButtonDefaults.buttonColors() else ButtonDefaults.filledTonalButtonColors(),
+                icon = {
+                    if (selected) Icon(Icons.Rounded.Check, contentDescription = null, modifier = Modifier.size(20.dp))
+                    else Icon(painterResource(action.icon(engaged = false)), contentDescription = null, tint = c.iconStrong, modifier = Modifier.size(20.dp))
+                },
+                secondaryLabel = { Text(action.description, maxLines = 1, overflow = TextOverflow.Ellipsis) },
+                label = { Text(action.label) },
+            )
         }
     }
 }

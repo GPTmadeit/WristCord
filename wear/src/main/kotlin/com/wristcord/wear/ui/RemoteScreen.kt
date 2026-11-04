@@ -41,11 +41,12 @@ import androidx.wear.compose.material3.onehandedgesture.OneHandedGesturePriority
 import androidx.wear.compose.material3.onehandedgesture.oneHandedGesture
 import androidx.wear.compose.material3.onehandedgesture.rememberOneHandedGestureConfiguration
 import com.wristcord.R
-import com.wristcord.shared.Brand
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
 import com.wristcord.shared.VoiceState
 import kotlinx.coroutines.launch
+import com.wristcord.wear.ui.theme.discord
+import com.wristcord.wear.ui.theme.ThemedBackground
 
 /**
  * The remote, laid out the way YouTube Music lays out its transport: one oversized control in
@@ -67,6 +68,9 @@ fun RemoteScreen(
     artwork: ImageBitmap?,
     onAction: (RemoteAction) -> Unit,
     onOpenSettings: () -> Unit,
+    /** Discord's own context for the call: "Server · on your phone", or null when signed out. */
+    context: String? = null,
+    onOpenParticipants: (() -> Unit)? = null,
 ) {
     val centre = assignments[Slot.CENTRE] ?: Slot.CENTRE.default
     val left = assignments[Slot.LEFT] ?: Slot.LEFT.default
@@ -83,15 +87,16 @@ fun RemoteScreen(
     val interactionSource = remember { MutableInteractionSource() }
     val scope = rememberCoroutineScope()
 
+    val c = discord
     BoxWithConstraints(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color.Black),
+            .background(if (ambient.isAmbient) Color.Black else c.baseLowest),
     ) {
         val size: Dp = if (maxWidth < maxHeight) maxWidth else maxHeight
         val nudge = ambient.burnInOffset
 
-        val centreDiameter = size * 0.36f
+        val centreDiameter = size * 0.34f
         val sideDiameter = size * 0.215f
         val bottomDiameter = size * 0.20f
         val gearDiameter = size * 0.145f
@@ -125,14 +130,18 @@ fun RemoteScreen(
         Text(
             text = headline(state),
             style = MaterialTheme.typography.labelMedium,
-            color = if (ambient.isAmbient) Color(Brand.ON_SURFACE_VARIANT) else Color(Brand.ON_SURFACE),
+            color = if (ambient.isAmbient) c.textMuted else c.headingPrimary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             textAlign = TextAlign.Center,
             modifier = Modifier
                 .align(Alignment.Center)
                 .offset(x = nudge, y = size * -0.325f + nudge)
-                .fillMaxWidth(0.66f),
+                .fillMaxWidth(0.66f)
+                .then(
+                    if (onOpenParticipants != null && !ambient.isAmbient && state.inCall) Modifier.clickable(onClick = onOpenParticipants)
+                    else Modifier
+                ),
         )
 
         RemoteButton(
@@ -144,7 +153,7 @@ fun RemoteScreen(
             enabled = left != RemoteAction.NONE,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = size * -0.315f + nudge, y = size * -0.02f + nudge),
+                .offset(x = size * -0.315f + nudge, y = size * -0.05f + nudge),
             onClick = { onAction(left) },
         )
 
@@ -158,7 +167,7 @@ fun RemoteScreen(
             interactionSource = interactionSource,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = nudge, y = size * -0.02f + nudge)
+                .offset(x = nudge, y = size * -0.05f + nudge)
                 .oneHandedGesture(
                     gestureConfiguration = gestureConfiguration,
                     onGestureLabel = centre.centreLabel(state),
@@ -188,14 +197,14 @@ fun RemoteScreen(
             enabled = right != RemoteAction.NONE,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = size * 0.315f + nudge, y = size * -0.02f + nudge),
+                .offset(x = size * 0.315f + nudge, y = size * -0.05f + nudge),
             onClick = { onAction(right) },
         )
 
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = nudge, y = size * 0.195f + nudge)
+                .offset(x = nudge, y = size * 0.175f + nudge)
                 .fillMaxWidth(0.72f),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(1.dp),
@@ -203,20 +212,20 @@ fun RemoteScreen(
             Text(
                 text = centre.centreLabel(state),
                 style = MaterialTheme.typography.labelLarge,
-                color = if (ambient.isAmbient) Color.White else Color(Brand.ON_SURFACE),
+                color = if (ambient.isAmbient) Color.White else c.headingPrimary,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
             )
             Text(
-                text = subline(state, error, centre),
+                text = subline(state, error, centre, context),
                 style = MaterialTheme.typography.labelSmall,
                 color = when {
-                    ambient.isAmbient -> Color(Brand.OUTLINE)
-                    error != null || state.blocker.isNotBlank() -> MaterialTheme.colorScheme.error
-                    else -> Color(Brand.ON_SURFACE_VARIANT)
+                    ambient.isAmbient -> c.textMuted
+                    error != null || state.blocker.isNotBlank() -> c.textCritical
+                    else -> c.textMuted
                 },
-                maxLines = 2,
+                maxLines = if (context.isNullOrBlank()) 2 else 1,
                 overflow = TextOverflow.Ellipsis,
                 textAlign = TextAlign.Center,
             )
@@ -231,7 +240,7 @@ fun RemoteScreen(
             enabled = bottom != RemoteAction.NONE,
             modifier = Modifier
                 .align(Alignment.Center)
-                .offset(x = size * -0.085f + nudge, y = size * 0.345f + nudge),
+                .offset(x = size * -0.085f + nudge, y = size * 0.37f + nudge),
             onClick = { onAction(bottom) },
         )
 
@@ -241,7 +250,7 @@ fun RemoteScreen(
             Box(
                 modifier = Modifier
                     .align(Alignment.Center)
-                    .offset(x = size * 0.145f, y = size * 0.345f),
+                    .offset(x = size * 0.145f, y = size * 0.37f),
             ) {
                 SettingsDot(diameter = gearDiameter, onClick = onOpenSettings)
             }
@@ -251,11 +260,12 @@ fun RemoteScreen(
 
 @Composable
 private fun SettingsDot(diameter: Dp, onClick: () -> Unit) {
+    val c = discord
     Box(
         modifier = Modifier
             .size(diameter)
             .clip(CircleShape)
-            .background(Color(Brand.SURFACE), CircleShape)
+            .background(c.surfaceHigh, CircleShape)
             .clickable(onClick = onClick)
             .semantics { contentDescription = "Settings" },
         contentAlignment = Alignment.Center,
@@ -263,7 +273,7 @@ private fun SettingsDot(diameter: Dp, onClick: () -> Unit) {
         Icon(
             painter = painterResource(R.drawable.ic_settings),
             contentDescription = null,
-            tint = Color(Brand.ON_SURFACE_VARIANT),
+            tint = c.iconDefault,
             modifier = Modifier.size(diameter * 0.5f),
         )
     }
@@ -275,9 +285,46 @@ private fun headline(state: VoiceState): String = when {
     else -> "WristCord"
 }
 
-private fun subline(state: VoiceState, error: String?, centre: RemoteAction): String = when {
+private fun subline(state: VoiceState, error: String?, centre: RemoteAction, context: String?): String = when {
     error != null -> error
     state.blocker.isNotBlank() -> state.blocker
     !state.inCall -> "Not in a voice call"
+    // The red disc and its "Unmute"/"Undeafen" label already say what state you are in; the
+    // one line under it is better spent on where the call is.
+    !context.isNullOrBlank() -> context
     else -> centre.statusIn(state)
+}
+
+/**
+ * The remote with always-on: only this screen keeps the display up in ambient, the way a
+ * media player does. Everything else returns to the watch face like any other app.
+ */
+@Composable
+fun RemoteHost(
+    state: VoiceState,
+    error: String?,
+    pending: String?,
+    assignments: Map<Slot, RemoteAction>,
+    artwork: ImageBitmap?,
+    context: String?,
+    onAction: (RemoteAction) -> Unit,
+    onOpenSettings: () -> Unit,
+    onOpenParticipants: (() -> Unit)?,
+) {
+    val ambient = rememberAmbientState()
+    Box(Modifier.fillMaxSize()) {
+        RemoteScreen(
+            state = state,
+            error = error,
+            pending = pending,
+            assignments = assignments,
+            ambient = ambient,
+            artwork = artwork,
+            onAction = onAction,
+            onOpenSettings = onOpenSettings,
+            context = context,
+            onOpenParticipants = onOpenParticipants,
+        )
+        if (!ambient.isAmbient) androidx.wear.compose.material3.TimeText()
+    }
 }

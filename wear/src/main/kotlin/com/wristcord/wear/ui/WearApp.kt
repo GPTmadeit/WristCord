@@ -1,302 +1,228 @@
 package com.wristcord.wear.ui
 
-import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.remember
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.style.TextAlign
-import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.material3.AppScaffold
-import androidx.wear.compose.material3.Button
-import androidx.wear.compose.material3.ButtonDefaults
-import androidx.wear.compose.material3.Icon
-import androidx.wear.compose.material3.ListHeader
-import androidx.wear.compose.material3.MaterialTheme
-import androidx.wear.compose.material3.ScreenScaffold
 import androidx.wear.compose.material3.SwipeToDismissBox
-import androidx.wear.compose.material3.Text
-import com.wristcord.shared.Brand
-import com.wristcord.shared.OutputDevice
+import androidx.wear.compose.material3.TimeText
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
 import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
-import com.wristcord.shared.VoiceState
-import com.wristcord.shared.Wire
+import com.wristcord.wear.WristCordApp
+import com.wristcord.wear.discord.Voice
 import com.wristcord.wear.link.ArtworkStore
 import com.wristcord.wear.link.Commands
 import com.wristcord.wear.link.OngoingService
 import com.wristcord.wear.link.SlotConfig
 import com.wristcord.wear.link.StateStore
+import com.wristcord.wear.ui.theme.WristCordTheme
+import kotlinx.coroutines.launch
 
-private sealed interface Screen {
-    data object Remote : Screen
-    data object Outputs : Screen
-    data object Settings : Screen
-    data class SlotPicker(val slot: Slot) : Screen
-    data object Updates : Screen
+sealed interface Screen {
+    val key: String
+    data object Home : Screen { override val key = "home" }
+    data object Login : Screen { override val key = "login" }
+    data object Dms : Screen { override val key = "dms" }
+    data class Guild(val id: Long) : Screen { override val key = "guild-$id" }
+    data class Chat(val channelId: Long, val replyTo: Long? = null) : Screen { override val key = "chat-$channelId" }
+    data class Message(val channelId: Long, val messageId: Long) : Screen { override val key = "msg-$messageId" }
+    data object Remote : Screen { override val key = "remote" }
+    data class Participants(val channelId: Long) : Screen { override val key = "people-$channelId" }
+    data object Outputs : Screen { override val key = "outputs" }
+    data object Settings : Screen { override val key = "settings" }
+    data object Status : Screen { override val key = "status" }
+    data object Theme : Screen { override val key = "theme" }
+    data object Buttons : Screen { override val key = "buttons" }
+    data class SlotPicker(val slot: Slot) : Screen { override val key = "slot-${slot.id}" }
+    data object Updates : Screen { override val key = "updates" }
 }
+
+/** Where a launch intent (tile, chip, complication) asked to land. */
+enum class Destination { NONE, REMOTE, OUTPUTS }
 
 @Composable
 fun WearApp(
-    openOutputs: Boolean,
+    destination: Destination,
     updates: UpdateController,
-    onOutputsConsumed: () -> Unit,
+    onDestinationConsumed: () -> Unit,
+    /** Debug builds only: screens to open on top of the root, for demo screenshots. */
+    debugStack: List<Screen> = emptyList(),
 ) {
     val ctx = LocalContext.current
-    val state by StateStore.state.collectAsState()
-    val error by StateStore.error.collectAsState()
-    val pending by StateStore.pending.collectAsState()
-    val assignments by SlotConfig.assignments.collectAsState()
-    val artworkBitmap by ArtworkStore.bitmap.collectAsState()
+    val app = WristCordApp.of(ctx)
+    val account = app.account
+    val client = app.discord
+    val scope = rememberCoroutineScope()
+
+    val signedIn by account.signedIn.collectAsStateWithLifecycle()
+    val snapshot by client.state.snapshot.collectAsStateWithLifecycle()
+    val gateway by client.gateway.state.collectAsStateWithLifecycle()
+    val gatewayVoice by Voice.gateway.collectAsStateWithLifecycle()
+    val phone by StateStore.state.collectAsStateWithLifecycle()
+    val error by StateStore.error.collectAsStateWithLifecycle()
+    val pending by StateStore.pending.collectAsStateWithLifecycle()
+    val assignments by SlotConfig.assignments.collectAsStateWithLifecycle()
+    val artworkBitmap by ArtworkStore.bitmap.collectAsStateWithLifecycle()
     val artwork: ImageBitmap? = remember(artworkBitmap) { artworkBitmap?.asImageBitmap() }
-    val updateStatus by updates.status.collectAsState()
-    val ambient = rememberAmbientState()
+    val updateStatus by updates.status.collectAsStateWithLifecycle()
+    val voiceState = remember(gatewayVoice, phone, signedIn) { Voice.merge(gatewayVoice, phone, signedIn) }
 
-    val stack = remember { mutableStateListOf<Screen>(Screen.Remote) }
-    fun push(screen: Screen) = stack.add(screen)
+    val root: Screen = if (signedIn) Screen.Home else Screen.Login
+    val stack = remember(root) { mutableStateListOf(root).apply { if (signedIn) addAll(debugStack) } }
+    val saveable = rememberSaveableStateHolder()
+    fun push(s: Screen) = stack.add(s)
     fun pop() {
-        if (stack.size > 1) stack.removeAt(stack.lastIndex)
-    }
-
-    LaunchedEffect(openOutputs) {
-        if (openOutputs) {
-            if (stack.last() !is Screen.Outputs) push(Screen.Outputs)
-            onOutputsConsumed()
+        if (stack.size > 1) {
+            saveable.removeState(stack.last().key)
+            stack.removeAt(stack.lastIndex)
         }
     }
 
-    // Always-on shows the remote, the way YTM's ambient view always shows what is playing.
-    LaunchedEffect(ambient.isAmbient) {
-        if (ambient.isAmbient && stack.size > 1) {
-            stack.removeRange(1, stack.size)
+    LaunchedEffect(destination) {
+        when (destination) {
+            Destination.REMOTE -> if (stack.last() !is Screen.Remote) push(Screen.Remote)
+            Destination.OUTPUTS -> if (stack.last() !is Screen.Outputs) push(Screen.Outputs)
+            Destination.NONE -> Unit
         }
+        if (destination != Destination.NONE) onDestinationConsumed()
     }
 
-    val onAction: (RemoteAction) -> Unit = { action ->
+    val onRemoteAction: (RemoteAction) -> Unit = { action ->
         when {
             action == RemoteAction.NONE -> Unit
             action.opensList -> push(Screen.Outputs)
-            action == RemoteAction.REFRESH -> Commands.refresh(ctx)
-            action.path != null -> Commands.fire(ctx, action.path)
+            action == RemoteAction.REFRESH -> {
+                Commands.refresh(ctx)
+                account.touch("refresh")
+            }
+            action == RemoteAction.DISCONNECT && action.path != null ->
+                Commands.fireOrElse(ctx, action.path!!) { client.leaveVoiceViaGateway() }
+            action.path != null -> Commands.fire(ctx, action.path!!)
+        }
+    }
+
+    @Composable
+    fun Render(screen: Screen) {
+        saveable.SaveableStateProvider(screen.key) {
+            when (screen) {
+                Screen.Login -> LoginScreen(
+                    onSignedIn = { token -> account.signedIn(token) },
+                    onOpenSettings = { push(Screen.Settings) },
+                )
+                Screen.Home -> HomeScreen(
+                    snapshot = snapshot,
+                    gateway = gateway,
+                    voice = gatewayVoice,
+                    onOpenVoice = { push(Screen.Remote) },
+                    onOpenDms = { push(Screen.Dms) },
+                    onOpenGuild = { push(Screen.Guild(it)) },
+                    onOpenStatus = { push(Screen.Status) },
+                    onOpenSettings = { push(Screen.Settings) },
+                )
+                Screen.Dms -> DmListScreen(snapshot, onOpen = { push(Screen.Chat(it)) })
+                is Screen.Guild -> GuildScreen(
+                    snapshot, screen.id,
+                    onOpenChannel = { push(Screen.Chat(it)) },
+                    onOpenVoiceChannel = { id ->
+                        if (gatewayVoice.inCall && gatewayVoice.channelId == id) push(Screen.Remote) else push(Screen.Participants(id))
+                    },
+                )
+                is Screen.Chat -> ChatScreen(
+                    snapshot, screen.channelId,
+                    onOpenMessage = { push(Screen.Message(screen.channelId, it)) },
+                    replyTo = screen.replyTo,
+                    onReplyConsumed = {
+                        val i = stack.indexOfLast { it is Screen.Chat && it.channelId == screen.channelId }
+                        if (i >= 0 && screen.replyTo != null) stack[i] = Screen.Chat(screen.channelId)
+                    },
+                )
+                is Screen.Message -> MessageActionsScreen(
+                    snapshot, screen.channelId, screen.messageId,
+                    onReply = {
+                        pop()
+                        val i = stack.indexOfLast { it is Screen.Chat && it.channelId == screen.channelId }
+                        if (i >= 0) stack[i] = Screen.Chat(screen.channelId, replyTo = screen.messageId)
+                    },
+                    onDone = ::pop,
+                )
+                Screen.Remote -> RemoteHost(
+                    state = voiceState,
+                    error = error,
+                    pending = pending,
+                    assignments = assignments,
+                    artwork = artwork,
+                    context = if (signedIn && gatewayVoice.inCall) voiceLine(gatewayVoice.copy(selfMute = false, selfDeaf = false, serverMute = false, serverDeaf = false)) else null,
+                    onAction = onRemoteAction,
+                    onOpenSettings = { push(Screen.Buttons) },
+                    onOpenParticipants = if (signedIn && gatewayVoice.inCall) { { push(Screen.Participants(gatewayVoice.channelId)) } } else null,
+                )
+                is Screen.Participants -> ParticipantsScreen(snapshot, screen.channelId)
+                Screen.Outputs -> OutputsScreen(voiceState, error, pending, onChoose = { device ->
+                    Commands.chooseOutput(ctx, device)
+                    pop()
+                })
+                Screen.Settings -> SettingsScreen(
+                    snapshot = snapshot,
+                    signedIn = signedIn,
+                    updateSummary = updates.summary(updateStatus),
+                    ongoingEnabled = OngoingService.isEnabled(ctx),
+                    onToggleOngoing = { OngoingService.setEnabled(ctx, it) },
+                    onOpenStatus = { push(Screen.Status) },
+                    onOpenTheme = { push(Screen.Theme) },
+                    onOpenButtons = { push(Screen.Buttons) },
+                    onOpenUpdates = {
+                        updates.check()
+                        push(Screen.Updates)
+                    },
+                    onSignOut = {
+                        scope.launch { account.signOut(revoke = true) }
+                    },
+                )
+                Screen.Status -> StatusScreen(snapshot, onDone = ::pop)
+                Screen.Theme -> ThemeScreen()
+                Screen.Buttons -> ButtonsScreen(
+                    assignments = assignments,
+                    onEditSlot = { push(Screen.SlotPicker(it)) },
+                    onReset = { SlotConfig.reset(ctx) },
+                )
+                is Screen.SlotPicker -> SlotPickerScreen(
+                    slot = screen.slot,
+                    current = assignments[screen.slot] ?: screen.slot.default,
+                    onChoose = { action ->
+                        SlotConfig.assign(ctx, screen.slot, action)
+                        pop()
+                    },
+                )
+                Screen.Updates -> UpdateScreen(
+                    status = updateStatus,
+                    currentVersion = updates.currentVersionLabel,
+                    canInstall = Updater.canRequestInstalls(ctx),
+                    onCheck = { updates.check() },
+                    onInstall = { updates.install(it) },
+                )
+            }
         }
     }
 
     WristCordTheme {
-        AppScaffold(timeText = { if (!ambient.isAmbient) DefaultTimeText() }) {
+        AppScaffold(timeText = { if (stack.last() !is Screen.Remote) TimeText() }) {
             val current = stack.last()
-            if (current is Screen.Remote) {
-                Content(
-                    screen = current,
-                    state = state,
-                    error = error,
-                    pending = pending,
-                    assignments = assignments,
-                    ambient = ambient,
-                    artwork = artwork,
-                    updates = updates,
-                    updateStatus = updateStatus,
-                    onAction = onAction,
-                    onPush = ::push,
-                    onPop = ::pop,
-                )
+            if (stack.size == 1) {
+                Render(current)
             } else {
                 SwipeToDismissBox(onDismissed = ::pop) { isBackground ->
-                    Content(
-                        screen = if (isBackground) stack[stack.lastIndex - 1] else current,
-                        state = state,
-                        error = error,
-                        pending = pending,
-                        assignments = assignments,
-                        ambient = ambient,
-                        artwork = artwork,
-                        updates = updates,
-                        updateStatus = updateStatus,
-                        onAction = onAction,
-                        onPush = ::push,
-                        onPop = ::pop,
-                    )
+                    Render(if (isBackground) stack[stack.lastIndex - 1] else current)
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun DefaultTimeText() {
-    androidx.wear.compose.material3.TimeText()
-}
-
-@Composable
-private fun Content(
-    screen: Screen,
-    state: VoiceState,
-    error: String?,
-    pending: String?,
-    assignments: Map<Slot, RemoteAction>,
-    ambient: AmbientState,
-    artwork: ImageBitmap?,
-    updates: UpdateController,
-    updateStatus: Updater.Status,
-    onAction: (RemoteAction) -> Unit,
-    onPush: (Screen) -> Unit,
-    onPop: () -> Unit,
-) {
-    val ctx = LocalContext.current
-
-    when (screen) {
-        is Screen.Remote -> RemoteScreen(
-            state = state,
-            error = error,
-            pending = pending,
-            assignments = assignments,
-            ambient = ambient,
-            artwork = artwork,
-            onAction = onAction,
-            onOpenSettings = { onPush(Screen.Settings) },
-        )
-
-        is Screen.Outputs -> OutputsScreen(
-            state = state,
-            error = error,
-            pending = pending,
-            onChoose = { device ->
-                Commands.chooseOutput(ctx, device)
-                onPop()
-            },
-        )
-
-        is Screen.Settings -> SettingsScreen(
-            assignments = assignments,
-            updateSummary = updates.summary(updateStatus),
-            ongoingEnabled = OngoingService.isEnabled(ctx),
-            onToggleOngoing = { OngoingService.setEnabled(ctx, it) },
-            onEditSlot = { onPush(Screen.SlotPicker(it)) },
-            onReset = { SlotConfig.reset(ctx) },
-            onOpenUpdates = {
-                updates.check()
-                onPush(Screen.Updates)
-            },
-        )
-
-        is Screen.SlotPicker -> SlotPickerScreen(
-            slot = screen.slot,
-            current = assignments[screen.slot] ?: screen.slot.default,
-            onChoose = { action ->
-                SlotConfig.assign(ctx, screen.slot, action)
-                onPop()
-            },
-        )
-
-        is Screen.Updates -> UpdateScreen(
-            status = updateStatus,
-            currentVersion = updates.currentVersionLabel,
-            canInstall = Updater.canRequestInstalls(ctx),
-            onCheck = { updates.check() },
-            onInstall = { updates.install(it) },
-        )
-    }
-}
-
-@Composable
-private fun OutputsScreen(
-    state: VoiceState,
-    error: String?,
-    pending: String?,
-    onChoose: (OutputDevice) -> Unit,
-) {
-    val scroll = rememberScrollState()
-
-    ScreenScaffold(scrollState = scroll) { contentPadding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Color.Black)
-                .verticalScroll(scroll)
-                .padding(contentPadding)
-                .padding(horizontal = 10.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-        ) {
-            ListHeader { Text("Audio output") }
-
-            if (error != null) {
-                Text(
-                    error,
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.error,
-                    textAlign = TextAlign.Center,
-                )
-            }
-
-            if (state.outputs.isEmpty()) {
-                Box(Modifier.fillMaxWidth().padding(vertical = 12.dp), Alignment.Center) {
-                    Text(
-                        "The phone has not reported any devices yet.",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = Color(Brand.ON_SURFACE_VARIANT),
-                        textAlign = TextAlign.Center,
-                    )
-                }
-            }
-
-            state.outputs.forEach { device ->
-                val busy = pending == Wire.PATH_OUTPUT
-                Button(
-                    onClick = { onChoose(device) },
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = if (device.active) {
-                        ButtonDefaults.buttonColors(
-                            containerColor = RemoteAction.OUTPUT.dimColor,
-                            contentColor = Color(Brand.ON_SURFACE),
-                            secondaryContentColor = Color(Brand.ON_SURFACE_VARIANT),
-                        )
-                    } else {
-                        ButtonDefaults.filledTonalButtonColors()
-                    },
-                    icon = {
-                        Icon(
-                            painter = painterResource(
-                                if (device.active) com.wristcord.R.drawable.ic_check
-                                else com.wristcord.R.drawable.ic_output
-                            ),
-                            contentDescription = null,
-                            tint = RemoteAction.OUTPUT.color,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    },
-                    secondaryLabel = when {
-                        busy -> {
-                            { Text("Sending...") }
-                        }
-
-                        device.active -> {
-                            { Text("In use") }
-                        }
-
-                        else -> null
-                    },
-                    label = { Text(device.label) },
-                )
             }
         }
     }

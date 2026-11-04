@@ -20,15 +20,16 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.wear.compose.material3.Icon
-import com.wristcord.shared.Brand
 import com.wristcord.shared.RemoteAction
+import com.wristcord.wear.ui.theme.discord
 
 /**
  * One circular control.
  *
- * Resting state is a dark disc with the action's Google colour on the glyph; engaged state
- * fills the disc with that colour. Same shape language as the YouTube Music transport row,
- * which is what makes the centre button reachable without looking.
+ * Resting state is a neutral disc in the current Discord theme; engaged mute/deafen fill red
+ * the way Discord's own voice panel shows them, and Leave is always the red hang-up. Same
+ * shape language as the YouTube Music transport row, which is what makes the centre button
+ * reachable without looking.
  *
  * In ambient everything collapses to an outline on black - no fills, no colour - so the panel
  * draws almost nothing.
@@ -55,19 +56,17 @@ fun RemoteButton(
     val fill: Color
     val tint: Color
     val ring: Color
+    val themed = remoteColors(action, engaged)
+    val c = discord
 
     if (ambient.isAmbient) {
         fill = Color.Black
-        tint = if (engaged) Color.White else Color(Brand.ON_SURFACE_VARIANT)
-        ring = if (engaged) Color.White else Color(Brand.OUTLINE)
-    } else if (engaged) {
-        fill = action.color
-        tint = action.onColor
-        ring = Color.Transparent
+        tint = if (engaged) Color.White else c.iconMuted
+        ring = if (engaged) Color.White else c.borderStrong
     } else {
-        fill = Color(Brand.SURFACE_HIGH)
-        tint = action.color
-        ring = Color.Transparent
+        fill = themed.fill
+        tint = themed.tint
+        ring = if (action == RemoteAction.NONE) c.borderNormal else Color.Transparent
     }
 
     Box(

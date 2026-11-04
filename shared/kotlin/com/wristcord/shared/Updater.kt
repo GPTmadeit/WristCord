@@ -10,6 +10,7 @@ import android.util.Log
 import androidx.compose.runtime.Immutable
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.net.HttpURLConnection
@@ -38,6 +39,7 @@ object Updater {
 
     private const val TAG = "WristCord/Update"
     private const val API = "https://api.github.com/repos/$REPO/releases/latest"
+    private const val API_ALL = "https://api.github.com/repos/$REPO/releases?per_page=20"
     private const val CONNECT_TIMEOUT_MS = 15_000
     private const val READ_TIMEOUT_MS = 30_000
 
@@ -72,8 +74,10 @@ object Updater {
     suspend fun check(currentVersion: String, assetMarker: String): Result<Release?> =
         withContext(Dispatchers.IO) {
             runCatching {
-                val body = get(API)
-                val json = JSONObject(body)
+                // A beta build follows betas (GitHub pre-releases) as well as stable releases;
+                // a stable build only ever sees /releases/latest, which skips pre-releases.
+                val json = if (isPrerelease(currentVersion)) newestOf(JSONArray(get(API_ALL))) else JSONObject(get(API))
+                json ?: return@runCatching null
                 val tag = json.optString("tag_name").ifBlank { error("Release has no tag") }
                 val assets = json.optJSONArray("assets") ?: error("Release has no assets")
 
@@ -203,16 +207,42 @@ object Updater {
     fun canRequestInstalls(ctx: Context): Boolean =
         runCatching { ctx.packageManager.canRequestPackageInstalls() }.getOrDefault(false)
 
-    /** Semantic-ish compare that tolerates "v" prefixes and differing segment counts. */
-    fun isNewer(candidate: String, current: String): Boolean {
-        val a = parts(candidate)
-        val b = parts(current)
+    /**
+     * Semantic-version compare that tolerates "v" prefixes and differing segment counts, with
+     * pre-release ordering per semver: 2.0.0-beta.1 < 2.0.0-beta.2 < 2.0.0.
+     */
+    fun isNewer(candidate: String, current: String): Boolean = compare(candidate, current) > 0
+
+    fun isPrerelease(version: String): Boolean = version.removePrefix("v").contains('-')
+
+    fun compare(x: String, y: String): Int {
+        val a = parts(x)
+        val b = parts(y)
         for (i in 0 until maxOf(a.size, b.size)) {
             val left = a.getOrElse(i) { 0 }
             val right = b.getOrElse(i) { 0 }
-            if (left != right) return left > right
+            if (left != right) return left.compareTo(right)
         }
-        return false
+        val pa = pre(x)
+        val pb = pre(y)
+        // A release outranks any pre-release of the same version.
+        if (pa.isEmpty() && pb.isEmpty()) return 0
+        if (pa.isEmpty()) return 1
+        if (pb.isEmpty()) return -1
+        for (i in 0 until maxOf(pa.size, pb.size)) {
+            val l = pa.getOrNull(i) ?: return -1
+            val r = pb.getOrNull(i) ?: return 1
+            val ln = l.toIntOrNull()
+            val rn = r.toIntOrNull()
+            val c = when {
+                ln != null && rn != null -> ln.compareTo(rn)
+                ln != null -> -1
+                rn != null -> 1
+                else -> l.compareTo(r)
+            }
+            if (c != 0) return c
+        }
+        return 0
     }
 
     private fun parts(version: String): List<Int> = version
@@ -220,6 +250,22 @@ object Updater {
         .substringBefore('-')
         .split('.')
         .map { it.filter(Char::isDigit).toIntOrNull() ?: 0 }
+
+    private fun pre(version: String): List<String> =
+        version.removePrefix("v").substringAfter('-', "").takeIf { it.isNotEmpty() }?.split('.') ?: emptyList()
+
+    /** The highest-versioned published release in a /releases page, drafts excluded. */
+    private fun newestOf(all: JSONArray): JSONObject? {
+        var best: JSONObject? = null
+        for (i in 0 until all.length()) {
+            val r = all.getJSONObject(i)
+            if (r.optBoolean("draft")) continue
+            val tag = r.optString("tag_name")
+            if (tag.isBlank()) continue
+            if (best == null || compare(tag, best.optString("tag_name")) > 0) best = r
+        }
+        return best
+    }
 
     private fun get(url: String): String = open(url, accept = "application/vnd.github+json").let {
         val text = it.inputStream.bufferedReader().use { reader -> reader.readText() }

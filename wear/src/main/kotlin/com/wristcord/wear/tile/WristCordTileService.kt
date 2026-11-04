@@ -11,6 +11,7 @@ import androidx.wear.protolayout.ModifiersBuilders.Clickable
 import androidx.wear.protolayout.layout.column
 import androidx.wear.protolayout.material3.ButtonColors
 import androidx.wear.protolayout.material3.MaterialScope
+import androidx.wear.protolayout.material3.TextButtonStyle
 import androidx.wear.protolayout.material3.buttonGroup
 import androidx.wear.protolayout.material3.primaryLayout
 import androidx.wear.protolayout.material3.text
@@ -24,26 +25,38 @@ import androidx.wear.tiles.TileBuilders.Tile
 import androidx.wear.tiles.tile
 import androidx.wear.tiles.timeline
 import androidx.wear.tiles.timelineEntry
-import com.wristcord.shared.Brand
+import androidx.compose.ui.graphics.toArgb
 import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
 import com.wristcord.shared.VoiceState
 import com.wristcord.wear.MainActivity
+import com.wristcord.wear.WristCordApp
+import com.wristcord.wear.discord.ThemePrefs
+import com.wristcord.wear.discord.TokenVault
+import com.wristcord.wear.discord.Voice
 import com.wristcord.wear.link.SlotConfig
 import com.wristcord.wear.link.StateStore
+import com.wristcord.wear.ui.remoteColors
+import com.wristcord.wear.ui.theme.DiscordColors
+import com.wristcord.wear.ui.theme.tokens
 
 /**
  * The tile mirrors the app: the CENTRE slot gets a full-width primary button, the other three
- * sit under it. Same Google colours, same slot assignments - change the layout in Settings and
- * the tile follows, because both read [SlotConfig].
+ * sit under it. Same Discord theme, same slot assignments - change the layout in Settings and
+ * the tile follows, because both read [SlotConfig]. Mute state is Discord's own, from the
+ * gateway, whenever the watch has heard from it recently; looking at the tile asks for a fresh
+ * reading.
  */
 class WristCordTileService : Material3TileService() {
 
     override suspend fun MaterialScope.tileResponse(requestParams: TileRequest): Tile {
         val ctx = this@WristCordTileService
-        val state = StateStore.readSync(ctx)
+        val state = Voice.mergedSync(ctx, StateStore.readSync(ctx))
         val error = StateStore.readErrorSync(ctx)
         val slots = SlotConfig.readSync(ctx)
+        palette = ThemePrefs.read(ctx).theme.tokens()
+        // Someone is looking at the tile: bring Discord's state up to date for the next frame.
+        if (TokenVault(ctx).hasToken) WristCordApp.of(ctx).account.touch("tile")
 
         return tile(
             timeline = timeline(
@@ -80,7 +93,10 @@ class WristCordTileService : Material3TileService() {
             buttonGroup(height = weight(1f)) {
                 others.forEach { action ->
                     buttonGroupItem {
-                        actionButton(ctx, action, action.label, engaged(action, state))
+                        // Three across leaves room for a short word in the small style, not a
+                        // full label. (Inline icons need renderer support the Material3 tile
+                        // service only uses when the watch advertises it.)
+                        actionButton(ctx, action, action.shortLabel, engaged(action, state), small = true)
                     }
                 }
             },
@@ -94,33 +110,38 @@ class WristCordTileService : Material3TileService() {
         action: RemoteAction,
         label: String,
         engaged: Boolean,
+        small: Boolean = false,
     ): LayoutElement = textButton(
         onClick = clickableFor(ctx, action),
         labelContent = { text(label.layoutString) },
         width = expand(),
         height = expand(),
         colors = colorsFor(action, engaged),
+        style = if (small) TextButtonStyle.smallTextButtonStyle() else TextButtonStyle.defaultTextButtonStyle(),
     )
 
-    /** Engaged fills with the action's colour; resting is a dark disc with a coloured label. */
-    private fun colorsFor(action: RemoteAction, engaged: Boolean): ButtonColors = if (engaged) {
-        ButtonColors(
-            containerColor = action.accent.argb,
-            iconColor = onAccent(action).argb,
-            labelColor = onAccent(action).argb,
-            secondaryLabelColor = onAccent(action).argb,
-        )
-    } else {
-        ButtonColors(
-            containerColor = Brand.SURFACE_HIGH.argb,
-            iconColor = action.accent.argb,
-            labelColor = action.accent.argb,
-            secondaryLabelColor = Brand.ON_SURFACE_VARIANT.argb,
+    private val RemoteAction.shortLabel: String
+        get() = when (this) {
+            RemoteAction.MUTE -> "Mic"
+            RemoteAction.DEAFEN -> "Deaf"
+            RemoteAction.OUTPUT -> "Out"
+            RemoteAction.DISCONNECT -> "End"
+            RemoteAction.REFRESH -> "Sync"
+            RemoteAction.NONE -> ""
+        }
+
+    private var palette: DiscordColors = DiscordColors.Onyx
+
+    /** Discord's voice-panel colours: neutral at rest, red when muted/deafened, red hang-up. */
+    private fun colorsFor(action: RemoteAction, engaged: Boolean): ButtonColors {
+        val c = remoteColors(palette, action, engaged)
+        return ButtonColors(
+            containerColor = c.fill.toArgb().argb,
+            iconColor = c.tint.toArgb().argb,
+            labelColor = c.tint.toArgb().argb,
+            secondaryLabelColor = palette.textMuted.toArgb().argb,
         )
     }
-
-    private fun onAccent(action: RemoteAction): Int =
-        if (action == RemoteAction.DEAFEN) Brand.INK else 0xFFFFFFFF.toInt()
 
     private fun MaterialScope.clickableFor(ctx: Context, action: RemoteAction): Clickable =
         if (action.opensList) openOutputsClickable(ctx) else commandClickable(ctx, action)
@@ -194,7 +215,7 @@ class WristCordTileService : Material3TileService() {
     private fun footerFor(state: VoiceState, error: String?): String = when {
         error != null -> error
         state.blocker.isNotBlank() -> state.blocker
-        !state.inCall -> "Not in a voice call"
+        !state.inCall -> "Not in a call"
         else -> state.outputs.firstOrNull { it.active }?.label ?: "Connected"
     }
 
