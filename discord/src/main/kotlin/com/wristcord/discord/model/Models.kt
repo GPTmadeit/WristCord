@@ -108,6 +108,8 @@ object ChannelType {
         type == GUILD_STAGE_VOICE || type == DM || type == GROUP_DM ||
         type == PUBLIC_THREAD || type == PRIVATE_THREAD || type == ANNOUNCEMENT_THREAD
 
+    fun isThread(type: Int) = type == PUBLIC_THREAD || type == PRIVATE_THREAD || type == ANNOUNCEMENT_THREAD
+
     fun isVoice(type: Int) = type == GUILD_VOICE || type == GUILD_STAGE_VOICE
 }
 

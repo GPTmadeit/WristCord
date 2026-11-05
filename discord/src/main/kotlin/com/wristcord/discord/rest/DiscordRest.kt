@@ -14,20 +14,32 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.add
+import kotlinx.serialization.json.addJsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.doubleOrNull
 import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.putJsonArray
 import kotlinx.serialization.json.putJsonObject
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.asRequestBody
 import okhttp3.RequestBody.Companion.toRequestBody
+import java.io.File
 import java.io.IOException
 import java.net.URLEncoder
 import kotlin.math.ceil
+
+/** Where Discord wants a file put, and the name to quote back when the message is sent. */
+data class UploadSlot(val uploadUrl: String, val uploadFilename: String)
+
+/** A file already in Discord's storage, ready to be attached to a message. */
+data class UploadedFile(val filename: String, val uploadFilename: String)
 
 class DiscordHttpException(
     val status: Int,
@@ -44,6 +56,7 @@ class DiscordHttpException(
 class DiscordRest(
     private val http: OkHttpClient,
     private val identity: ClientIdentity,
+    private val apiBase: String = Discord.API_BASE,
     private val token: () -> String?,
 ) {
     private val jsonType = "application/json".toMediaType()
@@ -67,6 +80,7 @@ class DiscordRest(
         replyTo: Long? = null,
         guildId: Long? = null,
         nonce: String = Snowflake.nonce(),
+        files: List<UploadedFile> = emptyList(),
     ): Message {
         val body = buildJsonObject {
             put("content", content)
@@ -74,6 +88,18 @@ class DiscordRest(
             put("tts", false)
             put("flags", 0)
             put("mobile_network_type", "unknown")
+            if (files.isNotEmpty()) {
+                // getAttachmentPayload in the app: the position is the id.
+                putJsonArray("attachments") {
+                    files.forEachIndexed { i, f ->
+                        addJsonObject {
+                            put("id", i.toString())
+                            put("filename", f.filename)
+                            put("uploaded_filename", f.uploadFilename)
+                        }
+                    }
+                }
+            }
             if (replyTo != null) {
                 putJsonObject("message_reference") {
                     put("message_id", replyTo.toString())
@@ -84,6 +110,39 @@ class DiscordRest(
             }
         }
         return DiscordJson.decodeFromJsonElement(Message.serializer(), call("POST", "/channels/$channelId/messages", body))
+    }
+
+    /** First half of Discord's cloud upload: ask where the file should go. */
+    suspend fun requestUpload(channelId: Long, filename: String, size: Long): UploadSlot {
+        val body = buildJsonObject {
+            putJsonArray("files") {
+                addJsonObject {
+                    put("id", "0")
+                    put("filename", filename)
+                    put("file_size", size)
+                    put("is_clip", false)
+                }
+            }
+        }
+        val slot = call("POST", "/channels/$channelId/attachments", body).jsonObject["attachments"]!!.jsonArray[0].jsonObject
+        return UploadSlot(
+            uploadUrl = (slot["upload_url"] as JsonPrimitive).content,
+            uploadFilename = (slot["upload_filename"] as JsonPrimitive).content,
+        )
+    }
+
+    /**
+     * Second half: the bytes go straight to the storage bucket. The URL is already signed, and
+     * the account's token must never travel with it.
+     */
+    suspend fun putUpload(uploadUrl: String, file: File) = withContext(Dispatchers.IO) {
+        val request = Request.Builder()
+            .url(uploadUrl)
+            .put(file.asRequestBody("application/octet-stream".toMediaType()))
+            .build()
+        http.newCall(request).execute().use { res ->
+            if (!res.isSuccessful) throw DiscordHttpException(res.code, null, "Upload failed (HTTP ${res.code})")
+        }
     }
 
     suspend fun typing(channelId: Long) {
@@ -159,7 +218,7 @@ class DiscordRest(
         var attempt = 0
         while (true) {
             val request = Request.Builder()
-                .url(Discord.API_BASE + path)
+                .url(apiBase + path)
                 .method(method, bodyFor(method, body))
                 .header("User-Agent", Discord.USER_AGENT)
                 .header("X-Super-Properties", identity.superPropertiesBase64)

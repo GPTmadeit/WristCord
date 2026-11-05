@@ -24,6 +24,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Image
 import androidx.compose.material.icons.rounded.Mic
 import androidx.compose.material.icons.rounded.Reply
 import androidx.compose.runtime.Composable
@@ -82,11 +83,18 @@ import java.util.Date
 /**
  * A channel or DM. Newest at the bottom like every chat, the crown scrolls history, reaching
  * the top pulls older messages, and the edge button replies by voice, keyboard or emoji -
- * whatever the watch's own input method offers.
+ * whatever the watch's own input method offers. Pictures go through the row above it.
  */
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-fun ChatScreen(snapshot: Snapshot, channelId: Long, onOpenMessage: (Long) -> Unit, replyTo: Long? = null, onReplyConsumed: () -> Unit = {}) {
+fun ChatScreen(
+    snapshot: Snapshot,
+    channelId: Long,
+    onOpenMessage: (Long) -> Unit,
+    onSendImage: () -> Unit,
+    replyTo: Long? = null,
+    onReplyConsumed: () -> Unit = {},
+) {
     val ctx = LocalContext.current
     val client = WristCordApp.of(ctx).discord
     val scope = rememberCoroutineScope()
@@ -132,8 +140,9 @@ fun ChatScreen(snapshot: Snapshot, channelId: Long, onOpenMessage: (Long) -> Uni
     val items = state.messages
     val typing = snapshot.typingIn(channelId)
     val listState = rememberTransformingLazyColumnState()
-    // Rows emitted below: title, status line, messages, pending sends, typing line.
-    val lastIndex = 1 + items.size + state.pending.size + (if (typing.isNotEmpty()) 1 else 0)
+    val canAttach = snapshot.canAttachFiles(channelId)
+    // Rows emitted below: title, status line, messages, pending sends, typing line, image button.
+    val lastIndex = 1 + items.size + state.pending.size + (if (typing.isNotEmpty()) 1 else 0) + (if (canAttach) 1 else 0)
     var pinned by remember(channelId) { mutableStateOf(false) }
     // Follow the conversation while you are at the bottom of it; leave you alone while you
     // read history. Loading older messages never moves you because rows are keyed by id.
@@ -195,7 +204,10 @@ fun ChatScreen(snapshot: Snapshot, channelId: Long, onOpenMessage: (Long) -> Uni
         for (p in state.pending) row(spec, "p-${p.nonce}") {
             PendingRow(p, plain, onRetry = {
                 client.state.messages.dropPending(channelId, p.nonce)
-                scope.launch { client.send(channelId, p.content, p.replyTo) }
+                val image = p.image
+                // On the app's scope: an upload outlives leaving the channel.
+                if (image != null) WristCordApp.of(ctx).scope.launch { client.sendImage(channelId, image, p.content, p.replyTo) }
+                else scope.launch { client.send(channelId, p.content, p.replyTo) }
             })
         }
         if (typing.isNotEmpty()) row(spec, "typing") {
@@ -206,6 +218,16 @@ fun ChatScreen(snapshot: Snapshot, channelId: Long, onOpenMessage: (Long) -> Uni
                     else -> "Several people are typing…"
                 },
                 modifier,
+            )
+        }
+        if (canAttach) row(spec, "image") {
+            Button(
+                onClick = onSendImage,
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(Icons.Rounded.Image, contentDescription = null) },
+                label = { Text("Send image", maxLines = 1) },
             )
         }
     }
@@ -366,7 +388,17 @@ private fun EmbedCard(e: com.wristcord.discord.model.Embed, resolver: MentionRes
 private fun PendingRow(p: PendingMessage, modifier: Modifier, onRetry: () -> Unit) {
     val c = discord
     Column(modifier.padding(horizontal = 6.dp, vertical = 2.dp).then(if (p.failed != null) Modifier.clickable(onClick = onRetry) else Modifier)) {
-        Text(p.content, style = MaterialTheme.typography.bodySmall, color = if (p.failed != null) c.textCritical else c.textMuted)
+        if (p.content.isNotBlank()) Text(p.content, style = MaterialTheme.typography.bodySmall, color = if (p.failed != null) c.textCritical else c.textMuted)
+        if (p.image != null) {
+            AsyncImage(
+                model = p.image,
+                contentDescription = "Image being sent",
+                contentScale = ContentScale.Crop,
+                alpha = 0.6f,
+                modifier = Modifier.padding(top = 2.dp).fillMaxWidth().height(72.dp).clip(RoundedCornerShape(8.dp)),
+            )
+            if (p.failed == null) Caption("Sending image…")
+        }
         if (p.failed != null) Caption("Not sent · tap to retry", color = c.textCritical)
     }
 }

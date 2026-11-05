@@ -267,6 +267,21 @@ WristCord's `DiscordTokens.kt` (including the gradient table) is generated from 
 tables by `tools/gen_theme.py`. Only what the watch uses is committed, resolved to ARGB, in
 `docs/extracted/tokens-used.json` (83 tokens across the four themes, and the 23 gradients).
 
+## Sending an attachment
+
+Observed in the bundle (`getAttachmentPayload`, and the cloud upload in Metro module 8023). The
+JSON field names of the first request are also seen in other callers of the same endpoint family;
+this flow has been exercised against a mock server, not yet against Discord itself.
+
+1. `POST /channels/{id}/attachments` with `{"files":[{"id":"0","filename":...,"file_size":...,"is_clip":false}]}`
+   answers `{"attachments":[{"upload_url":...,"upload_filename":...}]}`.
+2. `PUT {upload_url}` with the raw bytes and `Content-Type: application/octet-stream`. This is a
+   signed storage URL, so the account token is not sent.
+3. `POST /channels/{id}/messages` with the usual body plus
+   `"attachments":[{"id":"0","filename":...,"uploaded_filename":...}]`. `content` may be empty.
+
+`ATTACH_FILES` is permission bit 15. WristCord hides the button where the account lacks it.
+
 ## Reproducing this against a newer Discord build
 
 The scripts are in [`tools/re/`](../tools/re). They only parse the bundle, they never run it.

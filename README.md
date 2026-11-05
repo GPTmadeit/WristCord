@@ -10,7 +10,8 @@ Discord's own apps are. No phone app needed.
 > Discord call on a Pixel Watch 4, end-to-end encrypted, with the watch's own logs. beta.2 and
 > beta.3 joined silent calls; [docs/wear-audio.md](docs/wear-audio.md) explains why. While a
 > call is on the watch, its voice channel screen shows live diagnostics, so a problem says where
-> the audio stops. Please report anything odd.
+> the audio stops. Sending images (beta.6) was tested against a mock Discord server and on the
+> emulator, not yet on a real account or watch. Please report anything odd.
 
 > **Unofficial client.** WristCord is not made by or affiliated with Discord. Discord's Terms
 > of Service do not allow third-party clients, and an account using one can be actioned. WristCord
@@ -39,6 +40,15 @@ without losing your button layout.
 
 ## What it does
 
+- **Send images.** In any chat, **Send image** above the Message button. A watch has no camera,
+  so there are three sources: **From phone** (scan a QR code with your phone's camera, pick a
+  photo in the browser, no app needed; both must be on the same Wi-Fi), **On this watch**, and
+  **Draw** with your finger. You always get a preview, with an optional caption, and nothing
+  leaves the watch until you press Send. Pictures are resized to at most 1280 px and re-encoded,
+  which also removes EXIF data such as location. An animated image is sent as its first frame.
+  The phone page is plain HTTP on your local network and only exists while the QR code is on
+  screen, so someone able to read your Wi-Fi traffic could see that picture on its way to the
+  watch.
 - **Sign in with a QR code.** The watch shows one; Discord on your phone (**You → ⚙ → Scan QR Code**)
   reads it, asks you to confirm, and the watch gets a session of its own. No password or MFA
   prompt ever touches the watch. Settings → **Sign out** ends that session server-side.

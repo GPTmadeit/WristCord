@@ -8,7 +8,9 @@ import com.wristcord.discord.model.ReadySupplemental
 import com.wristcord.discord.proto.Frecency
 import com.wristcord.discord.proto.UserSettings
 import com.wristcord.discord.remoteauth.RemoteAuth
+import com.wristcord.discord.model.Message
 import com.wristcord.discord.rest.DiscordRest
+import com.wristcord.discord.rest.UploadedFile
 import com.wristcord.discord.state.DiscordState
 import com.wristcord.discord.state.PendingMessage
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +19,8 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonElement
 import okhttp3.OkHttpClient
+import java.io.File
+import java.io.IOException
 import java.util.concurrent.TimeUnit
 
 /**
@@ -28,6 +32,7 @@ class DiscordClient(
     val identity: ClientIdentity,
     private val scope: CoroutineScope,
     baseHttp: OkHttpClient = defaultHttp(),
+    apiBase: String = Discord.API_BASE,
 ) {
     /** REST and image loading share this pool. */
     val http: OkHttpClient = baseHttp
@@ -43,7 +48,7 @@ class DiscordClient(
     /** The token was rejected (gateway 4004 or REST 401). */
     var onSignedOut: (() -> Unit)? = null
 
-    val rest = DiscordRest(http, identity) { token }
+    val rest = DiscordRest(http, identity, apiBase) { token }
 
     val gateway = Gateway(socketHttp, identity, scope, object : Gateway.Listener {
         override fun onReady(ready: Ready) {
@@ -137,11 +142,35 @@ class DiscordClient(
         val me = state.value.me ?: return false
         val text = content.trim()
         if (text.isEmpty()) return false
-        val nonce = Snowflake.nonce()
-        state.messages.addPending(PendingMessage(nonce, channelId, text, me, replyTo))
+        val pending = PendingMessage(Snowflake.nonce(), channelId, text, me, replyTo)
+        return deliver(pending) { guildId -> rest.sendMessage(channelId, text, replyTo, guildId, pending.nonce) }
+    }
+
+    /**
+     * Sends [image] the way Discord's own app does: ask for an upload slot, put the bytes in
+     * storage, then post a message naming them. The file is kept until that worked, so a failed
+     * send can be retried from its row, and deleted after.
+     */
+    suspend fun sendImage(channelId: Long, image: File, caption: String = "", replyTo: Long? = null): Boolean {
+        val me = state.value.me ?: return false
+        val text = caption.trim()
+        val pending = PendingMessage(Snowflake.nonce(), channelId, text, me, replyTo, image = image)
+        val sent = deliver(pending) { guildId ->
+            if (!image.isFile) throw IOException("The image is no longer on the watch")
+            val slot = rest.requestUpload(channelId, image.name, image.length())
+            rest.putUpload(slot.uploadUrl, image)
+            rest.sendMessage(channelId, text, replyTo, guildId, pending.nonce, listOf(UploadedFile(image.name, slot.uploadFilename)))
+        }
+        if (sent) image.delete()
+        return sent
+    }
+
+    private suspend fun deliver(pending: PendingMessage, post: suspend (guildId: Long?) -> Message): Boolean {
+        val me = pending.author
+        val channelId = pending.channelId
+        state.messages.addPending(pending)
         return try {
-            val guildId = state.value.channels[channelId]?.guildId
-            val sent = rest.sendMessage(channelId, text, replyTo, guildId, nonce)
+            val sent = post(state.value.channels[channelId]?.guildId)
             // The gateway echo usually beats the HTTP response; whichever lands first wins.
             state.messages.onCreate(sent, me.id)
             state.update { s ->
@@ -153,7 +182,7 @@ class DiscordClient(
             }
             true
         } catch (t: Throwable) {
-            state.messages.failPending(channelId, nonce, t.message ?: "Not sent")
+            state.messages.failPending(channelId, pending.nonce, t.message ?: "Not sent")
             false
         }
     }

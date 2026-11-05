@@ -13,6 +13,7 @@ object Permissions {
     const val ADMINISTRATOR = 1L shl 3
     const val VIEW_CHANNEL = 1L shl 10
     const val SEND_MESSAGES = 1L shl 11
+    const val ATTACH_FILES = 1L shl 15
     const val READ_MESSAGE_HISTORY = 1L shl 16
     const val CONNECT = 1L shl 20
     const val ADD_REACTIONS = 1L shl 6

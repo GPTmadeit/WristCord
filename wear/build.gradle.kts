@@ -13,8 +13,8 @@ android {
         applicationId = "com.wristcord"
         minSdk = libs.versions.minSdkWear.get().toInt()
         targetSdk = libs.versions.targetSdk.get().toInt()
-        versionCode = 10
-        versionName = "2.0.0-beta.5"
+        versionCode = 11
+        versionName = "2.0.0-beta.6"
 
         // No Wear OS watch is x86; shipping those slices only inflates the download the
         // watch has to pull over Wi-Fi when it updates itself. Debug adds x86_64 for the emulator.

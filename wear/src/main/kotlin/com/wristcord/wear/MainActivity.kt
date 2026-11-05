@@ -94,6 +94,10 @@ class MainActivity : ComponentActivity() {
         "dms" -> listOf(Screen.Dms)
         "guild" -> listOf(Screen.Guild(1000))
         "chat" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL))
+        "image-sources" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL), Screen.ImageSources(Demo.GENERAL))
+        "gallery" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL), Screen.Gallery(Demo.GENERAL))
+        "doodle" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL), Screen.Doodle(Demo.GENERAL))
+        "phone-drop" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL), Screen.PhoneDrop(Demo.GENERAL))
         "message" -> listOf(Screen.Guild(1000), Screen.Chat(Demo.GENERAL),
             Screen.Message(Demo.GENERAL, WristCordApp.of(this).discord.state.messages.peek(Demo.GENERAL)?.messages?.lastOrNull()?.id ?: 0))
         "remote" -> listOf(Screen.Remote)

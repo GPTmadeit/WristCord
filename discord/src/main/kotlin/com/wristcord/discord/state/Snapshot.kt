@@ -161,6 +161,19 @@ data class Snapshot(
     /** The session holding the voice connection, so the UI can say "on your phone". */
     fun sessionFor(voice: VoiceState): Session? = sessions.firstOrNull { it.sessionId == voice.sessionId }
 
+    // ---- permissions -------------------------------------------------------------------------
+
+    /** May this account attach files here? DMs always; a thread goes by its parent's overwrites. */
+    fun canAttachFiles(channelId: Long): Boolean {
+        val channel = channels[channelId] ?: return false
+        val guildId = channel.guildId ?: return true
+        val guild = guilds[guildId] ?: return true
+        val myId = me?.id ?: return false
+        val source = if (ChannelType.isThread(channel.type)) channel.parentId?.let { channels[it] } ?: channel else channel
+        val base = Permissions.base(guildId, guild.ownerId, myId, guild.myRoles, guild.roles)
+        return Permissions.has(Permissions.channel(base, guildId, myId, guild.myRoles, source.overwrites), Permissions.ATTACH_FILES)
+    }
+
     // ---- names -------------------------------------------------------------------------------
 
     fun channelTitle(channel: Channel): String = when (channel.type) {

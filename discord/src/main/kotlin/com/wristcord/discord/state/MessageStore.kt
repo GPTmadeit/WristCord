@@ -18,6 +18,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
+import java.io.File
 
 /** A message the watch has sent but Discord has not echoed back yet. */
 data class PendingMessage(
@@ -27,6 +28,8 @@ data class PendingMessage(
     val author: User,
     val replyTo: Long?,
     val failed: String? = null,
+    /** The picture on its way, kept on disk until Discord has it. */
+    val image: File? = null,
 )
 
 data class ChannelMessages(

@@ -37,6 +37,11 @@ sealed interface Screen {
     data class Guild(val id: Long) : Screen { override val key = "guild-$id" }
     data class Chat(val channelId: Long, val replyTo: Long? = null) : Screen { override val key = "chat-$channelId" }
     data class Message(val channelId: Long, val messageId: Long) : Screen { override val key = "msg-$messageId" }
+    data class ImageSources(val channelId: Long) : Screen { override val key = "image-sources-$channelId" }
+    data class Gallery(val channelId: Long) : Screen { override val key = "gallery-$channelId" }
+    data class Doodle(val channelId: Long) : Screen { override val key = "doodle-$channelId" }
+    data class PhoneDrop(val channelId: Long) : Screen { override val key = "phone-drop-$channelId" }
+    data class ImagePreview(val channelId: Long, val path: String) : Screen { override val key = "image-preview-$path" }
     data object Remote : Screen { override val key = "remote" }
     data class VoiceChannel(val channelId: Long) : Screen { override val key = "voice-$channelId" }
     data object Outputs : Screen { override val key = "outputs" }
@@ -97,6 +102,16 @@ fun WearApp(
             saveable.removeState(stack.last().key)
             stack.removeAt(stack.lastIndex)
         }
+    }
+
+    // A finished drawing or phone upload takes its screen's place, so backing out of the preview
+    // lands on the source list instead of restarting that screen.
+    fun replaceTop(s: Screen) {
+        saveable.removeState(stack.last().key)
+        stack[stack.lastIndex] = s
+    }
+    fun backToChat(channelId: Long) {
+        while (stack.size > 1 && (stack.last() as? Screen.Chat)?.channelId != channelId) pop()
     }
 
     LaunchedEffect(destination) {
@@ -162,6 +177,7 @@ fun WearApp(
                 is Screen.Chat -> ChatScreen(
                     snapshot, screen.channelId,
                     onOpenMessage = { push(Screen.Message(screen.channelId, it)) },
+                    onSendImage = { push(Screen.ImageSources(screen.channelId)) },
                     replyTo = screen.replyTo,
                     onReplyConsumed = {
                         val i = stack.indexOfLast { it is Screen.Chat && it.channelId == screen.channelId }
@@ -176,6 +192,19 @@ fun WearApp(
                         if (i >= 0) stack[i] = Screen.Chat(screen.channelId, replyTo = screen.messageId)
                     },
                     onDone = ::pop,
+                )
+                is Screen.ImageSources -> ImageSourcesScreen(
+                    onGallery = { push(Screen.Gallery(screen.channelId)) },
+                    onDraw = { push(Screen.Doodle(screen.channelId)) },
+                    onPhone = { push(Screen.PhoneDrop(screen.channelId)) },
+                )
+                is Screen.Gallery -> GalleryScreen(onPicked = { push(Screen.ImagePreview(screen.channelId, it.path)) })
+                is Screen.Doodle -> DoodleScreen(onDone = { replaceTop(Screen.ImagePreview(screen.channelId, it.path)) }, onBack = ::pop)
+                is Screen.PhoneDrop -> PhoneDropScreen(onReceived = { replaceTop(Screen.ImagePreview(screen.channelId, it.path)) })
+                is Screen.ImagePreview -> ImagePreviewScreen(
+                    channelId = screen.channelId,
+                    file = java.io.File(screen.path),
+                    onSent = { backToChat(screen.channelId) },
                 )
                 Screen.Remote -> RemoteHost(
                     state = voiceState,

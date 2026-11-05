@@ -173,7 +173,7 @@ fun UnreadDot(modifier: Modifier = Modifier) {
  * correction level the phone camera reads comfortably off a small, curved, glossy screen.
  */
 @Composable
-fun QrCode(text: String, size: Dp, modifier: Modifier = Modifier) {
+fun QrCode(text: String, size: Dp, modifier: Modifier = Modifier, description: String = "QR code to sign in with Discord") {
     val bitmap = remember(text) {
         val matrix = QRCodeWriter().encode(
             text, BarcodeFormat.QR_CODE, 0, 0,
@@ -186,7 +186,7 @@ fun QrCode(text: String, size: Dp, modifier: Modifier = Modifier) {
     }
     Image(
         bitmap = bitmap,
-        contentDescription = "QR code to sign in with Discord",
+        contentDescription = description,
         filterQuality = FilterQuality.None,
         modifier = modifier
             .size(size)
