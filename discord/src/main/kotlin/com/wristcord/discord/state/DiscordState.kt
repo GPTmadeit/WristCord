@@ -10,11 +10,13 @@ import com.wristcord.discord.model.GuildMemberUpdate
 import com.wristcord.discord.model.GuildRoleEvent
 import com.wristcord.discord.model.GuildSettings
 import com.wristcord.discord.model.Message
+import com.wristcord.discord.model.MessageDelete
 import com.wristcord.discord.model.MessageAck
 import com.wristcord.discord.model.PassiveUpdateV2
 import com.wristcord.discord.model.Ready
 import com.wristcord.discord.model.ReadyGuild
 import com.wristcord.discord.model.ReadySupplemental
+import com.wristcord.discord.model.Relationship
 import com.wristcord.discord.model.Session
 import com.wristcord.discord.model.SettingsProtoUpdate
 import com.wristcord.discord.model.TypingStart
@@ -43,6 +45,13 @@ import java.util.Base64
 sealed interface StoreEvent {
     data class NewMessage(val message: Message, val mentionsMe: Boolean, val isDm: Boolean) : StoreEvent
     data class MessageRead(val channelId: Long) : StoreEvent
+    data class MessageDeleted(val channelId: Long, val messageId: Long) : StoreEvent
+    /** A DM or group call has started ringing this account. */
+    data class CallRinging(val channelId: Long) : StoreEvent
+    /** That call was answered, declined or ended. */
+    data class CallStopped(val channelId: Long) : StoreEvent
+    /** A full READY arrived, so anything sent during a long disconnection was not replayed. */
+    data object Synced : StoreEvent
     data object VoiceChanged : StoreEvent
     data object SettingsChanged : StoreEvent
     /** Where to connect for voice; arrives after this session asks to join (op 4). */
@@ -136,10 +145,12 @@ class DiscordState {
                 frecency = prev.frecency,
                 emojis = emojis.toPersistentMap(),
                 ready = true,
+                blocked = ready.relationships.filter { it.type in BLOCKING }.map { it.id }.toSet(),
             )
         }
         _events.tryEmit(StoreEvent.SettingsChanged)
         _events.tryEmit(StoreEvent.VoiceChanged)
+        _events.tryEmit(StoreEvent.Synced)
     }
 
     fun onReadySupplemental(s: ReadySupplemental) {
@@ -166,6 +177,7 @@ class DiscordState {
             myRoles = myRoles,
             myNick = nick,
             joinedSnowflake = Snapshot.joinedSnowflake(g.joinedAt),
+            defaultNotifications = g.properties?.defaultNotifications ?: g.defaultNotifications ?: NotificationPolicy.LEVEL_MENTIONS,
         )
     }
 
@@ -174,7 +186,12 @@ class DiscordState {
     fun onDispatch(type: String, d: JsonElement) {
         when (type) {
             "MESSAGE_CREATE" -> onMessageCreate(decode(Message.serializer(), d))
-            "MESSAGE_UPDATE", "MESSAGE_DELETE", "MESSAGE_DELETE_BULK",
+            "MESSAGE_DELETE" -> {
+                val del = decode(MessageDelete.serializer(), d)
+                messages.onDispatch(type, d, value.me?.id)
+                _events.tryEmit(StoreEvent.MessageDeleted(del.channelId, del.id))
+            }
+            "MESSAGE_UPDATE", "MESSAGE_DELETE_BULK",
             "MESSAGE_REACTION_ADD", "MESSAGE_REACTION_REMOVE", "MESSAGE_REACTION_ADD_MANY",
             "MESSAGE_REACTION_REMOVE_ALL", "MESSAGE_REACTION_REMOVE_EMOJI" -> messages.onDispatch(type, d, value.me?.id)
             "MESSAGE_ACK" -> onAck(decode(MessageAck.serializer(), d))
@@ -218,6 +235,14 @@ class DiscordState {
                 val u = decode(User.serializer(), d)
                 update { s -> if (s.me?.id == u.id) s.copy(me = u, users = s.users.put(u.id, u)) else s }
             }
+            "RELATIONSHIP_ADD" -> {
+                val r = decode(Relationship.serializer(), d)
+                update { s -> s.copy(blocked = if (r.type in BLOCKING) s.blocked + r.id else s.blocked - r.id) }
+            }
+            "RELATIONSHIP_REMOVE" -> {
+                val r = decode(Relationship.serializer(), d)
+                update { s -> s.copy(blocked = s.blocked - r.id) }
+            }
             "TYPING_START" -> onTyping(decode(TypingStart.serializer(), d))
             "GUILD_EMOJIS_UPDATE" -> {
                 val list = d.jsonObject["emojis"]?.let { decode(ListSerializer(com.wristcord.discord.model.Emoji.serializer()), it) }.orEmpty()
@@ -254,7 +279,9 @@ class DiscordState {
             s.copy(channels = channels, users = users, readStates = reads, typing = typing)
         }
         messages.onCreate(m, me.id)
-        if (m.author?.id != me.id) _events.tryEmit(StoreEvent.NewMessage(m, mentionsMe, isDm))
+        // Your own message from any device means you have seen the conversation.
+        if (m.author?.id == me.id) _events.tryEmit(StoreEvent.MessageRead(m.channelId))
+        else _events.tryEmit(StoreEvent.NewMessage(m, mentionsMe, isDm))
     }
 
     private fun onAck(a: MessageAck) {
@@ -361,11 +388,16 @@ class DiscordState {
     }
 
     private fun onCall(c: CallEvent) {
+        val me = value.me?.id
+        val wasRinging = me != null && value.ringing[c.channelId]?.contains(me) == true
+        val nowRinging = me != null && me in c.ringing
         update { s ->
             var voice = s.voice
             for (vs in c.voiceStates) voice = voice.put(VoiceKey(0L, vs.userId), vs.copy(guildId = null, channelId = vs.channelId ?: c.channelId))
             s.copy(voice = voice, ringing = s.ringing.put(c.channelId, c.ringing))
         }
+        if (nowRinging && !wasRinging) _events.tryEmit(StoreEvent.CallRinging(c.channelId))
+        if (wasRinging && !nowRinging) _events.tryEmit(StoreEvent.CallStopped(c.channelId))
         _events.tryEmit(StoreEvent.VoiceChanged)
     }
 
@@ -374,6 +406,7 @@ class DiscordState {
             val voice = s.voice.filterValues { it.channelId != channelId || it.guildId != null }
             s.copy(voice = voice.toPersistentMap(), ringing = s.ringing.remove(channelId))
         }
+        _events.tryEmit(StoreEvent.CallStopped(channelId))
         _events.tryEmit(StoreEvent.VoiceChanged)
     }
 
@@ -420,6 +453,7 @@ class DiscordState {
 
     private companion object {
         const val TYPING_MS = 10_000L
+        val BLOCKING = setOf(2, 5)
         val THREAD_TYPES = setOf(ChannelType.PUBLIC_THREAD, ChannelType.PRIVATE_THREAD, ChannelType.ANNOUNCEMENT_THREAD)
     }
 }

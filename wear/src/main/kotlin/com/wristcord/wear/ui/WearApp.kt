@@ -21,6 +21,8 @@ import com.wristcord.shared.UpdateController
 import com.wristcord.shared.Updater
 import com.wristcord.wear.WristCordApp
 import com.wristcord.wear.discord.Voice
+import com.wristcord.wear.notify.NotificationPrefs
+import com.wristcord.wear.notify.NotificationService
 import com.wristcord.wear.ui.theme.WristCordTheme
 import com.wristcord.wear.voice.CallState
 import com.wristcord.wear.voice.Headset
@@ -46,6 +48,7 @@ sealed interface Screen {
     data class VoiceChannel(val channelId: Long) : Screen { override val key = "voice-$channelId" }
     data object Outputs : Screen { override val key = "outputs" }
     data object Settings : Screen { override val key = "settings" }
+    data object Notifications : Screen { override val key = "notifications" }
     data object Status : Screen { override val key = "status" }
     data object Theme : Screen { override val key = "theme" }
     data object Icons : Screen { override val key = "icons" }
@@ -57,11 +60,16 @@ sealed interface Screen {
 /** Where a launch intent (tile, chip, complication) asked to land. */
 enum class Destination { NONE, REMOTE, OUTPUTS }
 
+/** A notification was tapped: the conversation or call it was about. */
+data class OpenTarget(val channelId: Long, val voice: Boolean)
+
 @Composable
 fun WearApp(
     destination: Destination,
     updates: UpdateController,
     onDestinationConsumed: () -> Unit,
+    openTarget: OpenTarget? = null,
+    onOpenTargetConsumed: () -> Unit = {},
     /** Debug builds only: screens to open on top of the root, for demo screenshots. */
     debugStack: List<Screen> = emptyList(),
 ) {
@@ -121,6 +129,27 @@ fun WearApp(
             Destination.NONE -> Unit
         }
         if (destination != Destination.NONE) onDestinationConsumed()
+    }
+
+    LaunchedEffect(openTarget, signedIn) {
+        val target = openTarget ?: return@LaunchedEffect
+        if (signedIn) {
+            val screen = if (target.voice) Screen.VoiceChannel(target.channelId) else Screen.Chat(target.channelId)
+            if (stack.last() != screen) push(screen)
+        }
+        onOpenTargetConsumed()
+    }
+
+    // Notifications are the one thing that needs asking for up front: unlike the mic or photos,
+    // there is no moment later on when the app could ask in context.
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) {
+        NotificationService.sync(ctx)
+    }
+    LaunchedEffect(signedIn) {
+        if (signedIn && NotificationPrefs.shouldAskPermission(ctx)) {
+            NotificationPrefs.markPermissionAsked(ctx)
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
     }
 
     // "Move here": take the call that is on another device, after the mic permission if needed.
@@ -244,6 +273,7 @@ fun WearApp(
                     updateSummary = updates.summary(updateStatus),
                     onOpenStatus = { push(Screen.Status) },
                     onOpenTheme = { push(Screen.Theme) },
+                    onOpenNotifications = { push(Screen.Notifications) },
                     onOpenIcons = { push(Screen.Icons) },
                     onOpenButtons = { push(Screen.Buttons) },
                     onOpenUpdates = {
@@ -255,6 +285,7 @@ fun WearApp(
                         scope.launch { account.signOut(revoke = true) }
                     },
                 )
+                Screen.Notifications -> NotificationsScreen()
                 Screen.Status -> StatusScreen(snapshot, onDone = ::pop)
                 Screen.Theme -> ThemeScreen()
                 Screen.Icons -> IconScreen(onDone = ::pop)

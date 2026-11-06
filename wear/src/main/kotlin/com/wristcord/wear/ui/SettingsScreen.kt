@@ -20,6 +20,7 @@ import androidx.compose.material.icons.rounded.Download
 import androidx.compose.material.icons.rounded.EditNote
 import androidx.compose.material.icons.rounded.GridView
 import androidx.compose.material.icons.rounded.Logout
+import androidx.compose.material.icons.rounded.Notifications
 import androidx.compose.material.icons.rounded.Palette
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -57,6 +58,7 @@ import com.wristcord.shared.RemoteAction
 import com.wristcord.shared.Slot
 import com.wristcord.wear.WristCordApp
 import com.wristcord.wear.discord.ThemePrefs
+import com.wristcord.wear.notify.NotificationPrefs
 import com.wristcord.wear.ui.components.Avatar
 import com.wristcord.wear.ui.components.Caption
 import com.wristcord.wear.ui.components.ListScreen
@@ -75,6 +77,7 @@ fun SettingsScreen(
     updateSummary: String,
     onOpenStatus: () -> Unit,
     onOpenTheme: () -> Unit,
+    onOpenNotifications: () -> Unit,
     onOpenIcons: () -> Unit,
     onOpenButtons: () -> Unit,
     onOpenUpdates: () -> Unit,
@@ -110,6 +113,19 @@ fun SettingsScreen(
                 icon = { Icon(Icons.Rounded.Palette, contentDescription = null, tint = c.iconBrand) },
                 label = { Text("Theme") },
                 secondaryLabel = { Text(themeSummary(theme), maxLines = 1, overflow = TextOverflow.Ellipsis) },
+            )
+        }
+
+        row(spec, "notifications") {
+            val mode by NotificationPrefs.mode.collectAsStateWithLifecycle()
+            Button(
+                onClick = onOpenNotifications,
+                modifier = modifier,
+                transformation = transformation,
+                colors = ButtonDefaults.filledTonalButtonColors(),
+                icon = { Icon(Icons.Rounded.Notifications, contentDescription = null, tint = c.iconDefault) },
+                label = { Text("Notifications") },
+                secondaryLabel = { Text(mode.label, maxLines = 1, overflow = TextOverflow.Ellipsis) },
             )
         }
 

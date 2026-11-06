@@ -28,6 +28,8 @@ data class GuildInfo(
     val myNick: String?,
     /** Snowflake of the join time; the read position of channels with no read state. */
     val joinedSnowflake: Long,
+    /** The server's own default for members with no setting: 0 all messages, 1 mentions. */
+    val defaultNotifications: Int = NotificationPolicy.LEVEL_MENTIONS,
 )
 
 data class ReadState(val lastMessageId: Long = 0, val mentionCount: Int = 0)
@@ -60,6 +62,8 @@ data class Snapshot(
     /** Custom emoji from every server the account is in, by id - for reactions and frecency. */
     val emojis: PersistentMap<Long, Emoji> = persistentMapOf(),
     val ready: Boolean = false,
+    /** Blocked and ignored users, whose messages never notify. */
+    val blocked: Set<Long> = emptySet(),
 ) {
     val dms: List<Channel>
         get() = channels.values.filter { it.isDm }.sortedByDescending { it.lastMessageId ?: it.id }

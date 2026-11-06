@@ -16,6 +16,10 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <!-- Notifications: Discord's push only reaches its own app, so the watch keeps its own
+         connection in a foreground service, starts it at boot, and wakes up to check on it. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_REMOTE_MESSAGING" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.CHANGE_NETWORK_STATE" />
     <!-- Sending a picture that is on the watch. Asked for only when the gallery is opened. -->
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
@@ -150,6 +154,28 @@
             android:name="com.wristcord.wear.voice.VoiceService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <service
+            android:name="com.wristcord.wear.notify.NotificationService"
+            android:exported="false"
+            android:foregroundServiceType="remoteMessaging" />
+
+        <receiver
+            android:name="com.wristcord.wear.notify.NotificationActionReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name="com.wristcord.wear.notify.KeepAliveReceiver"
+            android:exported="false" />
+
+        <receiver
+            android:name="com.wristcord.wear.notify.StartupReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Watch-face complication: mute state at a glance, one tap to open the remote. -->
         <service

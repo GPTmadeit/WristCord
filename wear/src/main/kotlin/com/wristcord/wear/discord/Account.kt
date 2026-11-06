@@ -17,7 +17,9 @@ import kotlinx.coroutines.launch
  *
  * The gateway is connected only while something is holding it - the app on screen, a tile
  * that was just looked at, or a call on the watch - and dropped a minute after the last holder
- * lets go. A watch that keeps a socket open all day is a watch that dies by dinner.
+ * lets go. The exception is [com.wristcord.wear.notify.NotificationService], which holds it for
+ * as long as notifications are on: there is no other way for them to arrive, and it is why that
+ * setting says what it costs.
  */
 class Account(
     private val ctx: Context,
@@ -91,6 +93,17 @@ class Account(
             delay(GRACE_MS)
             synchronized(this@Account) { if (holders.isEmpty()) client.pause() }
         }
+    }
+
+    val hasToken: Boolean get() = vault.hasToken
+
+    /** The token must be loaded before a notification action can use REST. */
+    @Synchronized
+    fun ensureToken(): Boolean {
+        if (client.token != null) return true
+        val token = vault.load() ?: return false
+        client.start(token)
+        return true
     }
 
     /** A short-lived hold, e.g. the tile was just swiped to. */

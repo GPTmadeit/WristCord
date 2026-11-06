@@ -48,6 +48,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.compose.LifecycleResumeEffect
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.wear.compose.foundation.lazy.rememberTransformingLazyColumnState
 import androidx.wear.compose.material3.Button
@@ -104,6 +105,13 @@ fun ChatScreen(
     val revealed = remember(channelId) { mutableStateMapOf<Long, Boolean>() }
     var replyingTo by remember(channelId) { mutableStateOf(replyTo) }
 
+    // Looking at a conversation is why it needs no notification.
+    LifecycleResumeEffect(channelId) {
+        val notifier = WristCordApp.of(ctx).notifier
+        notifier.setVisibleChannel(channelId)
+        notifier.clearChannel(channelId)
+        onPauseOrDispose { notifier.setVisibleChannel(null) }
+    }
     LaunchedEffect(channelId) {
         client.openChannel(channelId)
         if (!state.loaded) client.loadMessages(channelId)

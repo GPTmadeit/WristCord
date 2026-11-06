@@ -85,6 +85,8 @@ data class Channel(
     @SerialName("owner_id") @Serializable(NullableSnowflakeSerializer::class) val ownerId: Long? = null,
     @SerialName("user_limit") val userLimit: Int = 0,
     val flags: Long = 0,
+    @SerialName("is_message_request") val isMessageRequest: Boolean = false,
+    @SerialName("is_spam") val isSpam: Boolean = false,
 ) {
     val isDm: Boolean get() = type == ChannelType.DM || type == ChannelType.GROUP_DM
 }
@@ -128,6 +130,7 @@ data class ReadyGuild(
     val name: String? = null,
     val icon: String? = null,
     @SerialName("owner_id") @Serializable(NullableSnowflakeSerializer::class) val ownerId: Long? = null,
+    @SerialName("default_message_notifications") val defaultNotifications: Int? = null,
     val channels: List<Channel> = emptyList(),
     val threads: List<Channel> = emptyList(),
     val roles: List<Role> = emptyList(),
@@ -144,6 +147,7 @@ data class GuildProperties(
     val name: String? = null,
     val icon: String? = null,
     @SerialName("owner_id") @Serializable(NullableSnowflakeSerializer::class) val ownerId: Long? = null,
+    @SerialName("default_message_notifications") val defaultNotifications: Int? = null,
 )
 
 @Serializable
@@ -183,7 +187,11 @@ data class GuildSettings(
     @SerialName("guild_id") @Serializable(NullableSnowflakeSerializer::class) val guildId: Long? = null,
     val muted: Boolean = false,
     @SerialName("mute_config") val muteConfig: MuteConfig? = null,
-    @SerialName("message_notifications") val messageNotifications: Int = 0,
+    /** 0 all, 1 mentions, 2 nothing, 3 the server's default. */
+    @SerialName("message_notifications") val messageNotifications: Int = 3,
+    @SerialName("mobile_push") val mobilePush: Boolean = true,
+    @SerialName("suppress_everyone") val suppressEveryone: Boolean = false,
+    @SerialName("suppress_roles") val suppressRoles: Boolean = false,
     @SerialName("channel_overrides") val channelOverrides: List<ChannelOverride> = emptyList(),
 )
 
@@ -232,6 +240,14 @@ data class Ready(
     @SerialName("resume_gateway_url") val resumeGatewayUrl: String? = null,
     /** AUTH_TOKEN_REFRESH: Discord may hand out a replacement token here. */
     @SerialName("auth_token") val authToken: String? = null,
+    val relationships: List<Relationship> = emptyList(),
+)
+
+@Serializable
+data class Relationship(
+    @Serializable(SnowflakeSerializer::class) val id: Long,
+    /** 1 friend, 2 blocked, 3 incoming request, 4 outgoing request, 5 ignored. */
+    val type: Int = 0,
 )
 
 @Serializable

@@ -267,6 +267,29 @@ WristCord's `DiscordTokens.kt` (including the gradient table) is generated from 
 tables by `tools/gen_theme.py`. Only what the watch uses is committed, resolved to ARGB, in
 `docs/extracted/tokens-used.json` (83 tokens across the four themes, and the 23 gradients).
 
+## When a message notifies
+
+From `shouldNotifyBase` and `shouldNotify` (`modules/notifications/NotificationTextUtils.tsx`) and
+`stores/UserGuildSettingsStore.tsx`. `NotificationPolicy` in `:discord` follows this order:
+
+1. No notification for: message flag `SUPPRESS_NOTIFICATIONS` (bit 12, `@silent`), your own message,
+   a blocked or ignored author, status DND, a message request.
+2. `allowNoMessages`: muted server, category or channel, or a resolved level of "nothing". **A mute
+   wins over a mention.**
+3. `allowAllMessages`: not muted and level "all" notifies for everything.
+4. Otherwise it notifies only if `isRawMessageMentioned`, honouring `suppress_everyone` and
+   `suppress_roles`.
+
+`resolvedMessageNotifications` takes the first set value of channel override, category override,
+then the server. The values are 0 all, 1 mentions, 2 nothing, 3 unset. An unset server falls back
+to its `default_message_notifications`.
+
+Discord's real push is decided on its servers and delivered by Firebase to Discord's own signed
+app, so a third-party client cannot receive it. WristCord also honours `mobile_push`, and simplifies
+two things: system messages never notify, and a thread notifies only for a mention instead of
+tracking `computeThreadNotificationSetting`. It keeps `afk: true` in presence so that this
+connection does not divert the phone's own notifications.
+
 ## Sending an attachment
 
 Observed in the bundle (`getAttachmentPayload`, and the cloud upload in Metro module 8023). The

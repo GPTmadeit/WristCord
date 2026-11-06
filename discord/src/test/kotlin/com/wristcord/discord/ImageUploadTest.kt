@@ -110,6 +110,25 @@ class ImageUploadTest {
     }
 
     @Test
+    fun `a notification reply works before READY and reads the conversation`() = runBlocking {
+        client.state.update { it.copy(me = null) }
+        server.enqueue(json(echo))
+        val sent = client.replyDirect(channel, 1000L, " on my way ")
+        assertEquals(900L, sent.id)
+        val body = DiscordJson.parseToJsonElement(server.takeRequest().body!!.utf8()).jsonObject
+        assertEquals("on my way", (body["content"] as JsonPrimitive).content)
+        assertEquals(900L, client.state.value.readStates[channel]?.lastMessageId)
+    }
+
+    @Test
+    fun `mark as read from a notification acks that message`() = runBlocking {
+        server.enqueue(json("{}"))
+        client.markReadDirect(channel, 900L, 1000L)
+        assertEquals("/api/channels/$channel/messages/900/ack", server.takeRequest().url.encodedPath)
+        assertEquals(900L, client.state.value.readStates[channel]?.lastMessageId)
+    }
+
+    @Test
     fun `an image with no caption is allowed`() = runBlocking {
         server.enqueue(slotResponse())
         server.enqueue(MockResponse.Builder().code(200).build())

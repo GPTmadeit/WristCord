@@ -74,6 +74,8 @@ class Gateway(
     private val identity: ClientIdentity,
     private val scope: CoroutineScope,
     private val listener: Listener,
+    private val gatewayUrl: String = Discord.GATEWAY_URL,
+    private val pulseAckMs: Long = 10_000L,
 ) {
     interface Listener {
         fun onReady(ready: Ready)
@@ -93,6 +95,7 @@ class Gateway(
     @Volatile private var resumeUrl: String? = null
     @Volatile private var seq: Long? = null
     @Volatile private var heartbeatAcked = true
+    @Volatile private var lastHeartbeatMs = 0L
     @Volatile private var wanted = false
     @Volatile var presenceStatus: String = "unknown"
     @Volatile var afk: Boolean = true
@@ -190,7 +193,7 @@ class Gateway(
         val gen = generation.incrementAndGet()
         _state.value = GatewayState.Connecting
         val base = resumeUrl?.takeIf { isResumable }
-        val url = if (base != null) "$base/?encoding=json&v=${Discord.API_VERSION}&compress=zlib-stream" else Discord.GATEWAY_URL
+        val url = if (base != null) "$base/?encoding=json&v=${Discord.API_VERSION}&compress=zlib-stream" else gatewayUrl
         val request = Request.Builder()
             .url(url)
             .header("User-Agent", Discord.USER_AGENT)
@@ -340,6 +343,7 @@ class Gateway(
     }
 
     private fun sendHeartbeat() {
+        lastHeartbeatMs = System.currentTimeMillis()
         send(Op.HEARTBEAT, seq?.let(::JsonPrimitive) ?: JsonNull)
     }
 
@@ -391,6 +395,28 @@ class Gateway(
         if (!wanted || socket != null) return
         retryJob?.cancel()
         open()
+    }
+
+    /**
+     * A sleeping watch's timers stop, so the socket can die with nobody noticing. Called from a
+     * wake-up alarm while the CPU is held: reconnect if the socket is gone or silent, otherwise
+     * prove it is alive. A missing answer drops it [pulseAckMs] later.
+     */
+    fun pulse() {
+        if (!wanted) return
+        if (socket == null) return retryNow()
+        if (_state.value !is GatewayState.Connected) return
+        val gen = generation.get()
+        if (!heartbeatAcked) {
+            if (System.currentTimeMillis() - lastHeartbeatMs > pulseAckMs) fail(gen, 4000, "heartbeat not acknowledged")
+            return
+        }
+        heartbeatAcked = false
+        sendHeartbeat()
+        scope.launch {
+            delay(pulseAckMs)
+            if (!heartbeatAcked) fail(gen, 4000, "heartbeat not acknowledged")
+        }
     }
 
     @Serializable

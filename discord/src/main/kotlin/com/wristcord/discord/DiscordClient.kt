@@ -12,6 +12,7 @@ import com.wristcord.discord.model.Message
 import com.wristcord.discord.rest.DiscordRest
 import com.wristcord.discord.rest.UploadedFile
 import com.wristcord.discord.state.DiscordState
+import com.wristcord.discord.state.NotificationPolicy
 import com.wristcord.discord.state.PendingMessage
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -185,6 +186,43 @@ class DiscordClient(
             state.messages.failPending(channelId, pending.nonce, t.message ?: "Not sent")
             false
         }
+    }
+
+    /**
+     * Messages worth a notification that a full reconnect did not replay. READY only says what is
+     * unread, so this looks inside the few DMs and mentioned channels that changed since [sinceId].
+     */
+    suspend fun missedMessages(sinceId: Long, dmsAndMentionsOnly: Boolean, maxChannels: Int = 5): List<Message> {
+        val s = state.value
+        return s.channels.values
+            .filter { it.id !in s.hidden && (it.lastMessageId ?: 0) > sinceId && s.isUnread(it.id) && (it.isDm || s.mentions(it.id) > 0) }
+            .sortedByDescending { it.lastMessageId }
+            .take(maxChannels)
+            .flatMap { ch ->
+                runCatching { rest.messages(ch.id, limit = 5) }.getOrDefault(emptyList())
+                    .asReversed()
+                    .map { it.copy(guildId = ch.guildId) }
+                    .filter {
+                        it.id > sinceId && it.id > s.readPosition(ch.id) &&
+                            NotificationPolicy.decide(s, it, dmsAndMentionsOnly) != NotificationPolicy.Kind.NONE
+                    }
+            }
+    }
+
+    /**
+     * A reply from a notification. Goes straight to REST: the process may have just been started
+     * for this, before READY, when [send] would have no account to show the pending row under.
+     */
+    suspend fun replyDirect(channelId: Long, guildId: Long?, text: String): Message =
+        rest.sendMessage(channelId, text.trim(), guildId = guildId).also { sent ->
+            state.value.me?.let { state.messages.onCreate(sent, it.id) }
+            state.markReadLocally(channelId, sent.id)
+        }
+
+    /** "Mark as read" from a notification, with the same no-READY-needed reasoning. */
+    suspend fun markReadDirect(channelId: Long, messageId: Long, guildId: Long?) {
+        state.markReadLocally(channelId, messageId)
+        rest.ack(channelId, messageId, guildChannel = guildId != null, thread = state.value.channels[channelId]?.type in THREADS)
     }
 
     suspend fun react(channelId: Long, messageId: Long, emoji: Emoji, add: Boolean): Boolean {

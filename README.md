@@ -11,7 +11,9 @@ Discord's own apps are. No phone app needed.
 > beta.3 joined silent calls; [docs/wear-audio.md](docs/wear-audio.md) explains why. While a
 > call is on the watch, its voice channel screen shows live diagnostics, so a problem says where
 > the audio stops. Sending images (beta.6) was tested against a mock Discord server and on the
-> emulator, not yet on a real account or watch. Please report anything odd.
+> emulator, not yet on a real account or watch. Notifications (beta.7) were tested the same way,
+> and their battery cost and delay on a real watch have not been measured. Please report anything
+> odd.
 
 > **Unofficial client.** WristCord is not made by or affiliated with Discord. Discord's Terms
 > of Service do not allow third-party clients, and an account using one can be actioned. WristCord
@@ -40,6 +42,25 @@ without losing your button layout.
 
 ## What it does
 
+- **Notifications with the app closed.** Each conversation is one notification with its recent
+  messages and the sender's picture. Reply by voice, keyboard, emoji or a suggested reply, or mark
+  it read, without opening the app. Tap to open that chat. DM and group calls ring too. A
+  notification disappears when the conversation is read on any device or the message is deleted.
+  It follows the same rules as Discord's app: muted servers and channels, per-channel levels,
+  `@silent`, blocked users, Do Not Disturb. Settings → **Notifications** chooses **Match Discord**,
+  **DMs and mentions**, or **Off**, and Wear OS's own settings control each category.
+
+  Three things to know:
+  - Discord's push service only reaches Discord's own app, so WristCord stays connected to Discord
+    itself. **That uses more battery**, by an amount not yet measured. **Off** stops it entirely.
+  - The watch sleeps between messages, so one can arrive late, up to several minutes in deep
+    sleep, rather than instantly.
+  - Discord only sends a client every message in the servers it is looking at. In very large
+    servers, expect mentions but not necessarily every message, even when set to all messages.
+
+  If your phone's Discord already mirrors to the watch you will see messages twice. Turn Discord
+  off in your phone's watch app. WristCord's connection does not stop your phone getting its own
+  notifications.
 - **Send images.** In any chat, **Send image** above the Message button. A watch has no camera,
   so there are three sources: **From phone** (scan a QR code with your phone's camera, pick a
   photo in the browser, no app needed; both must be on the same Wi-Fi), **On this watch**, and
